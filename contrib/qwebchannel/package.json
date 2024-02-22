@@ -1,0 +1,25 @@
+{
+  "name": "qwebchannel",
+  "version": "5.9.0",
+  "description": "Asynchronous QObject communication",
+  "main": "qwebchannel.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://code.qt.io/qt/qtwebchannel.git"
+  },
+  "keywords": [
+    "qt",
+    "qml",
+    "qobject",
+    "websocket",
+    "webengine",
+    "qwebengine",
+    "qwebchannel",
+    "webchannel"
+  ],
+  "author": "Digia",
+  "license": "LGPL-2.1"
+}
