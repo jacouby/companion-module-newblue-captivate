@@ -11,7 +11,7 @@ const { InstanceBase, Regex, runEntrypoint, InstanceStatus } = require('@compani
 const Configuration = require('./lib/config')
 const Actions = require('./lib/actions')
 const Feedbacks = require('./lib/feedbacks')
-
+const Presets = require('./lib/presets')
 
 const UpgradeScripts = require('./lib/upgrades')
 
@@ -67,7 +67,8 @@ class CaptivateInstance extends InstanceBase {
         Object.assign(this, {
             ...Configuration,
             ...Actions,
-            ...Feedbacks
+            ...Feedbacks,
+            ...Presets
         });
 
         this.USE_QWEBCHANNEL = USE_QWEBCHANNEL;
@@ -113,7 +114,7 @@ class CaptivateInstance extends InstanceBase {
         
         this.setupFeedbacks(self);
         this.setupActions(self);
-        //this.initPresets(self);
+        this.initPresets(self);
     }
 
     /**
@@ -447,8 +448,8 @@ class CaptivateInstance extends InstanceBase {
 
                             var cacheKey = makeCacheKeyUsingOptions(feedbackKey, miss.options);
 
-                            console.log("received reply");
-                            console.log(JSON.stringify(reply));
+                            //console.log("received reply");
+                            //console.log(JSON.stringify(reply));
                             // cache local results
                             self.localFeedbackCache[cacheKey] = reply;
                             resolve();
@@ -482,9 +483,9 @@ class CaptivateInstance extends InstanceBase {
 
         let options = event.options
 
-        console.log("~~~~~~~~~~~~~");
-        console.log("--> in FeedBack", event);
-        console.log("~~~~~~~~~~~~~");
+        //console.log("~~~~~~~~~~~~~");
+        //console.log("--> in FeedBack", event);
+        //console.log("~~~~~~~~~~~~~");
 
 
         let cacheKey = makeCacheKeyUsingOptions(event.feedbackId, event.options);
@@ -495,7 +496,7 @@ class CaptivateInstance extends InstanceBase {
 
         if (result != undefined) {
 
-            console.log("found result in cache!", result);
+            //console.log("found result in cache!", result);
 
             if (result.hasOwnProperty("imageName")) {
                 var processedResult = {};
