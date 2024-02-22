@@ -7,8 +7,11 @@
  */
 const { InstanceBase, Regex, runEntrypoint, InstanceStatus } = require('@companion-module/base')
 
-const configuration = require('./lib/config')
-const actions = require('./lib/actions')
+// Companion Elements
+const Configuration = require('./lib/config')
+const Actions = require('./lib/actions')
+const Feedbacks = require('./lib/feedbacks')
+
 
 const UpgradeScripts = require('./lib/upgrades')
 
@@ -62,8 +65,9 @@ class CaptivateInstance extends InstanceBase {
         super(internal)
 
         Object.assign(this, {
-            ...configuration,
-            ...actions
+            ...Configuration,
+            ...Actions,
+            ...Feedbacks
         });
 
         this.USE_QWEBCHANNEL = USE_QWEBCHANNEL;
@@ -107,7 +111,7 @@ class CaptivateInstance extends InstanceBase {
 
         this.allowsFeedbackCacheRebuilding = true;
         
-        //this.setupFeedbacks(self);
+        this.setupFeedbacks(self);
         this.setupActions(self);
         //this.initPresets(self);
     }
@@ -189,9 +193,11 @@ class CaptivateInstance extends InstanceBase {
                 scheduler._cmp_v1_handleFeedbackChangeEvent.connect((actorId, feedbackId, options, state) => {
 
                     var feedbackKey = `${actorId}~${feedbackId}`;
-                    //console.log(`handle change ${feedbackKey}`, actorId, feedbackId, options, state);
+                    console.log(`handle change ${feedbackKey}`, actorId, feedbackId, options, state);
                     self.pendingFeedbackChanges[feedbackKey] = "stale";
-                    self.checkFeedbacks(feedbackKey);
+                 
+                    //checkFeedbacksById doesn't seem to work.. lets brute force it for now
+                    self.checkFeedbacks();
                 });
 
                 this.queryFeedbackState = function(actorId, feedbackId, options) {
@@ -412,13 +418,15 @@ class CaptivateInstance extends InstanceBase {
 
     rebuildFeedbackCache() {
 
+        //console.log("Rebuild feedback cache");
+
         let promises = [];
 
         var self = this;
 
         while (this.cacheMisses.length > 0) {
             let miss = this.cacheMisses.pop();
-            //console.log("Miss:::", miss);
+            console.log("Miss:::", miss);
 
             if (!miss.id === undefined) continue;
 
@@ -439,6 +447,8 @@ class CaptivateInstance extends InstanceBase {
 
                             var cacheKey = makeCacheKeyUsingOptions(feedbackKey, miss.options);
 
+                            console.log("received reply");
+                            console.log(JSON.stringify(reply));
                             // cache local results
                             self.localFeedbackCache[cacheKey] = reply;
                             resolve();
@@ -455,7 +465,7 @@ class CaptivateInstance extends InstanceBase {
 
         if (promises.length > 0) {
             Promise.allSettled(promises).then((values) => {
-                //console.log("All promises resolved.. check feedbacks again!");
+                console.log("All promises resolved.. check feedbacks again!");
                 self.checkFeedbacks();
             });
 
@@ -466,6 +476,71 @@ class CaptivateInstance extends InstanceBase {
         }
     }
 
-}
+
+
+    async handleFeedback(event) {
+
+        let options = event.options
+
+        console.log("~~~~~~~~~~~~~");
+        console.log("--> in FeedBack", event);
+        console.log("~~~~~~~~~~~~~");
+
+
+        let cacheKey = makeCacheKeyUsingOptions(event.feedbackId, event.options);
+
+        // lookup content in our local cache
+
+        let result = this.localFeedbackCache[cacheKey];
+
+        if (result != undefined) {
+
+            console.log("found result in cache!", result);
+
+            if (result.hasOwnProperty("imageName")) {
+                var processedResult = {};
+                Object.assign(processedResult, {...result });
+                delete processedResult.imageName;
+                let imageData = this.images[`${result.imageName}`];
+                //console.log('image data', imageData);
+                if (imageData != undefined) {
+                    processedResult['png64'] = imageData;
+                }
+                //console.log("returning processed result", processedResult);
+                result = processedResult;
+            }
+
+            if (this.pendingFeedbackChanges[event.feedbackId]) {
+                this.cacheMisses.push({ id: event.feedbackId, options: event.options });
+            }
+
+        } else {
+            // not in our cache, possibly because we've just started up
+            // Ask Titler live to push it back to us, which will trigger a refresh
+            this.cacheMisses.push({ id: event.feedbackId, options: event.options });
+        }
+
+        console.log("not in the cache");
+        if (this.cacheMisses.length > 0) {
+
+            if (this.cacheBuilder != undefined) {
+                clearTimeout(this.cacheBuilder);
+                delete this.cacheBuilder;
+                this.cacheBuilder = undefined;
+            }
+
+            let self = this;
+
+            // let's periodically try to make a connection again
+            cacheBuilder =
+                setInterval(() => {
+                    self.rebuildFeedbackCache();
+                }, 500);
+        }
+
+        return result;
+    }
+
+} // end: CaptivateInstance
 
 runEntrypoint(CaptivateInstance, UpgradeScripts)
