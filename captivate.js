@@ -12,14 +12,15 @@ const Configuration = require('./lib/config')
 const Actions = require('./lib/actions')
 const Feedbacks = require('./lib/feedbacks')
 const Presets = require('./lib/presets')
-
 const UpgradeScripts = require('./lib/upgrades')
+
 
 // We need to use a specific version (5.9) of QWebChannel because 5.15 which ships with CP 2.2.1
 // breaks compatibility with Titler live
 const QWebChannelEx = require('./contrib/qwebchannel').QWebChannel
 const WebSocket = require('ws')
 const crypto = require('crypto');
+const Jimp = require('jimp');
 const { EventEmitter } = require('stream')
 const { reject } = require('lodash')
 
@@ -194,10 +195,11 @@ class CaptivateInstance extends InstanceBase {
                 scheduler._cmp_v1_handleFeedbackChangeEvent.connect((actorId, feedbackId, options, state) => {
 
                     var feedbackKey = `${actorId}~${feedbackId}`;
-                    console.log(`handle change ${feedbackKey}`, actorId, feedbackId, options, state);
+                    console.log(`handle change: '${feedbackKey}'`, options);
                     self.pendingFeedbackChanges[feedbackKey] = "stale";
                  
                     //checkFeedbacksById doesn't seem to work.. lets brute force it for now
+                    //self.checkFeedbacksById( [feedbackKey]);
                     self.checkFeedbacks();
                 });
 
@@ -303,6 +305,7 @@ class CaptivateInstance extends InstanceBase {
                                             const baseImage = Buffer.from(state.png64, 'base64');
                                             const overlayImage = Buffer.from(layerImageData, 'base64');
 
+                                            /*
                                             const output = sharp(baseImage)
                                                 .composite([
                                                     { input: overlayImage, tile: true, blend: 'over' }
@@ -314,7 +317,42 @@ class CaptivateInstance extends InstanceBase {
                                                 }).catch((e) => {
                                                     resolve(state);
                                                 });
+                                                */
 
+                                                // Load the base image
+                                                Jimp.read(baseImage)
+                                                .then(base => {
+                                                    // Load the overlay image
+                                                    Jimp.read(overlayImage).then(overlay => {
+                                                        // Resize overlay to match base image, if necessary
+                                                        overlay.resize(base.bitmap.width, Jimp.AUTO);
+
+                                                        // Composite the overlay onto the base image
+                                                        base.composite(overlay, 0, 0, {
+                                                            mode: Jimp.BLEND_SOURCE_OVER,
+                                                            opacitySource: 1.0,
+                                                            opacityDest: 1.0
+                                                        })
+                                                        // Convert to buffer
+                                                        .getBuffer(Jimp.MIME_PNG, (err, buffer) => {
+                                                            if (err) {
+                                                                reject(err);
+                                                            } else {
+                                                                // Convert buffer to base64
+                                                                let base64data = buffer.toString('base64');
+                                                                state.png64 = base64data;
+                                                                resolve(state);
+                                                            }
+                                                        });
+                                                    }).catch(e => {
+                                                        console.error("Error loading overlay image:", e);
+                                                        resolve(state);
+                                                    });
+                                                })
+                                                .catch(e => {
+                                                    console.error("Error loading base image:", e);
+                                                    resolve(state);
+                                                });
                                             return;
 
                                         } else {
@@ -483,9 +521,9 @@ class CaptivateInstance extends InstanceBase {
 
         let options = event.options
 
-        //console.log("~~~~~~~~~~~~~");
-        //console.log("--> in FeedBack", event);
-        //console.log("~~~~~~~~~~~~~");
+        console.log("~~~~~~~~~~~~~");
+        console.log("--> in FeedBack", event);
+        console.log("~~~~~~~~~~~~~");
 
 
         let cacheKey = makeCacheKeyUsingOptions(event.feedbackId, event.options);
@@ -496,7 +534,7 @@ class CaptivateInstance extends InstanceBase {
 
         if (result != undefined) {
 
-            //console.log("found result in cache!", result);
+            console.log("found in cache");
 
             if (result.hasOwnProperty("imageName")) {
                 var processedResult = {};
@@ -513,15 +551,20 @@ class CaptivateInstance extends InstanceBase {
 
             if (this.pendingFeedbackChanges[event.feedbackId]) {
                 this.cacheMisses.push({ id: event.feedbackId, options: event.options });
+                console.log(`not in the cache: ${event.feedbackId} - ${JSON.stringify(event.options)}`);
+            }
+            else {
+                console.log(`found in the cache: ${event.feedbackId} - ${JSON.stringify(event.options)}`);
             }
 
         } else {
             // not in our cache, possibly because we've just started up
             // Ask Titler live to push it back to us, which will trigger a refresh
             this.cacheMisses.push({ id: event.feedbackId, options: event.options });
+            console.log(`not in the cache: ${event.feedbackId} - ${JSON.stringify(event.options)}`);
         }
 
-        console.log("not in the cache");
+     
         if (this.cacheMisses.length > 0) {
 
             if (this.cacheBuilder != undefined) {
