@@ -4,9 +4,15 @@
  * @details Connects Companion to Captivate (Titler Live)
  * @version 3.0
  * @license MIT
+ */
+
+/**
+ * JSDoc types
  * 
  * @typedef {import('@companion-module/base').CompanionActionDefinition} CompanionActionDefinition
  */
+
+/** Imports */
 const {InstanceBase, Regex, runEntrypoint, InstanceStatus} = require('@companion-module/base')
 
 
@@ -82,7 +88,6 @@ function promiseify(func) {
   }
 }
 
-let connectionWatchdog = undefined;
 let cacheBuilder = undefined;
 let allowsFeedbackCacheRebuilding = false;
 
