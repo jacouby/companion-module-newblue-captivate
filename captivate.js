@@ -286,10 +286,9 @@ class CaptivateInstance extends InstanceBase {
 
   makeVarDefinition(title, varname) {
     const name = `${title.name}: ${varname}` // the label
-    const variableId = `${title.name}__${varname}`.toLowerCase().replace(/[{}: ]/g, '_')
+    const variableId = `${title.name}__${varname}`.toLowerCase().replace(/[^a-zA-Z0-9]/g, '_')
     return {name, variableId}
   }
-
 
   makeCustomActionId(shortId) {
     return 'newblue.automation.js.' + shortId;
@@ -324,6 +323,7 @@ class CaptivateInstance extends InstanceBase {
       this.titlesByName = {};
       this.titlesById = {};
       this.titles = data.titles ?? []
+      this.titles.reverse();
       for (let title of this.titles) {
         this.titlesByName[title.name] = title;
         this.titlesById[title.id] = title;
