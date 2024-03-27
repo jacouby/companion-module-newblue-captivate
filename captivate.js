@@ -68,8 +68,10 @@ function makeCacheKeyUsingOptions(key, options) {
     const optionsHash = crypto.createHash('md5').update(JSON.stringify(vals)).digest('hex');
     cacheKey = `${cacheKey}+${optionsHash}`;
   }
-
-  //console.log("our cache key: ", cacheKey);
+  debug('======================================');
+  debug('making cache key for:', key, options);
+  debug(`Cache Key: ${cacheKey}`);
+  debug('======================================');
 
   return cacheKey;
 };
@@ -380,11 +382,16 @@ class CaptivateInstance extends InstanceBase {
     });
 
     // When Captivate changes a feedback item.
-    this.sp._cmp_v1_handleFeedbackChangeEvent.connect((actorId, feedbackId, options, state) => {
+    this.sp._cmp_v1_handleFeedbackChangeEvent.connect(async (actorId, feedbackId, options, state) => {
 
       var feedbackKey = `${actorId}~${feedbackId}`;
       console.log(`handle change: '${feedbackKey}'`, options);
       console.log(state);
+
+      state = await this._handleFeedbackState(state);
+
+      // put this state into the cache
+      this.cacheStore(actorId, feedbackId, options, state);
 
       this.pendingFeedbackChanges[feedbackKey] = "stale";
 
@@ -463,6 +470,137 @@ class CaptivateInstance extends InstanceBase {
     }
   }
 
+  async _handleFeedbackOverlayPlayStates(state) {
+    // query for our layer play states, we will use this to fold into our feedback state
+    const playStates = await this.sp.getValueForKey("newblue.automation.layerstate");
+
+    // did the feedback data include a dynamic image?
+    if (state.hasOwnProperty("overlayQueryKey")) {
+      let s = playStates[state.overlayQueryKey];
+      if (s == undefined || !s.hasOwnProperty('playState')) {
+        // we have a property
+        s = {};
+        s.playState = "unknown"
+      }
+
+      if (state.hasOwnProperty("overlayImageName_running")) {
+        if (s.playState === 'running') {
+          state.overlayImageName = state.overlayImageName_running;
+        }
+        delete state.overlayImageName_running;
+      }
+
+      if (state.hasOwnProperty("overlayImageName_paused")) {
+        if (s.playState === 'paused') {
+          state.overlayImageName = state.overlayImageName_paused;
+        }
+        delete state.overlayImageName_paused;
+      }
+
+      // done
+      delete state.overlayQueryKey;
+    }
+
+    if (state.hasOwnProperty("pngQueryKey")) {
+      let s = playStates[state.pngQueryKey];
+      if (s == undefined || !s.hasOwnProperty('playState')) {
+        s = {};
+        s.playState = "unknown";
+      }
+
+      // we have a property
+
+      if (state.hasOwnProperty("png_running")) {
+        if (s.playState === 'running') {
+          state.png_running = state.png_running;
+        }
+        delete state.png_running;
+      }
+
+      if (state.hasOwnProperty("png_paused")) {
+        if (s.playState === 'paused') {
+          state.png = state.png_paused;
+        }
+        delete state.png_paused;
+      }
+
+      // done
+      delete state.pngQueryKey;
+    }
+    return state;
+  }
+
+  async _handleFeedbackOverlayImage(state) {
+
+    // If the feedback specified an image name, attempt to load it from our local image cache.
+    if (state.hasOwnProperty("overlayImageName")) {
+      let layerImageData = this.images[`${state.overlayImageName}`];
+      delete state.overlayImageName;
+
+      if (!layerImageData) {
+        debug("bad layer data");
+      } else if (state.hasOwnProperty("png64")) {
+        const baseImage = Buffer.from(state.png64, 'base64');
+        const overlayImage = Buffer.from(layerImageData, 'base64');
+
+        await new Promise((resolve, reject) => {
+          // Load the base image
+          Jimp.read(baseImage)
+            .then(base => {
+              // Load the overlay image
+              Jimp.read(overlayImage).then(overlay => {
+                // Resize overlay to match base image, if necessary
+                overlay.resize(base.bitmap.width, Jimp.AUTO);
+
+                // Composite the overlay onto the base image
+                base.composite(overlay, 0, 0, {
+                  mode: Jimp.BLEND_SOURCE_OVER,
+                  opacitySource: 1.0,
+                  opacityDest: 1.0
+                })
+                  // Convert to buffer
+                  .getBuffer(Jimp.MIME_PNG, (err, buffer) => {
+                    if (err) {
+                      reject(err);
+                    } else {
+                      // Convert buffer to base64
+                      let base64data = buffer.toString('base64');
+                      state.png64 = base64data;
+                      resolve(state);
+                    }
+                  });
+              }).catch(e => {
+                console.error("Error loading overlay image:", e);
+                resolve(state);
+              });
+            })
+            .catch(e => {
+              console.error("Error loading base image:", e);
+              resolve(state);
+            });
+        })
+      } else {
+        // fall back
+        state.png64 = this.layerImageData;
+      }
+    } else if (state.hasOwnProperty("imageName")) {
+      state.png64 = this.images[`${state.imageName}`];
+      delete state.imageName;
+    }
+    return state;
+  }
+
+  async _handleFeedbackState(state) {
+    if (state.overlayQueryKey || state.pngQueryKey) {
+      state = await this._handleFeedbackOverlayPlayStates(state);
+      debug('state with overlay information', state);
+    }
+    if (state.overlayImageName || state.imageName) {
+      state = await this._handleFeedbackOverlayImage(state);
+    }
+    return state;
+  }
+
   /**
    * This asks Captivate what the current value of this feedback should be.
    * If the current feedback value should be an image, Captivate can push it to us.
@@ -479,66 +617,9 @@ class CaptivateInstance extends InstanceBase {
   async _queryFeedbackState(actorId, feedbackId, options) {
     const reply = await this.sp._cmp_v1_queryFeedbackState(actorId, feedbackId, options);
     try {
-      var value = JSON.parse(reply);
-      debug({actorId, feedbackId, options, result: value});
-
-      // query for our layer play states, we will use this to fold into our feedback state
-      const playStates = await this.sp.getValueForKey("newblue.automation.layerstate");
-
-      // did the feedback data include a dynamic image?
-      if (value.hasOwnProperty("overlayQueryKey")) {
-        let s = playStates[value.overlayQueryKey];
-        if (s == undefined || !s.hasOwnProperty('playState')) {
-          // we have a property
-          s = {};
-          s.playState = "unknown"
-        }
-
-        if (value.hasOwnProperty("overlayImageName_running")) {
-          if (s.playState === 'running') {
-            value.overlayImageName = value.overlayImageName_running;
-          }
-          delete value.overlayImageName_running;
-        }
-
-        if (value.hasOwnProperty("overlayImageName_paused")) {
-          if (s.playState === 'paused') {
-            value.overlayImageName = value.overlayImageName_paused;
-          }
-          delete value.overlayImageName_paused;
-        }
-
-        // done
-        delete value.overlayQueryKey;
-      }
-
-      if (value.hasOwnProperty("pngQueryKey")) {
-        let s = playStates[value.pngQueryKey];
-        if (s == undefined || !s.hasOwnProperty('playState')) {
-          s = {};
-          s.playState = "unknown";
-        }
-
-        // we have a property
-
-        if (value.hasOwnProperty("png_running")) {
-          if (s.playState === 'running') {
-            value.png_running = value.png_running;
-          }
-          delete value.png_running;
-        }
-
-        if (value.hasOwnProperty("png_paused")) {
-          if (s.playState === 'paused') {
-            value.png = value.png_paused;
-          }
-          delete value.png_paused;
-        }
-
-        // done
-        delete value.pngQueryKey;
-      }
-      return value;
+      var state = JSON.parse(reply);
+      debug({actorId, feedbackId, options, result: state});
+      return await this._handleFeedbackState(state);
     } catch (e) {
       console.log(`Error parsing response for ${feedbackId}`);
       throw "Bogus response";
@@ -562,70 +643,7 @@ class CaptivateInstance extends InstanceBase {
       console.log("An error occurred", e);
       throw e;
     }
-
-    // If the feedback specified an image name, attempt to load it from our local image cache.
-    if (state.hasOwnProperty("overlayImageName")) {
-      let layerImageData = this.images[`${state.overlayImageName}`];
-      delete state.overlayImageName;
-
-      if (!layerImageData) {
-        debug("bad layer data");
-      } else if (state.hasOwnProperty("png64")) {
-        const baseImage = Buffer.from(state.png64, 'base64');
-        const overlayImage = Buffer.from(layerImageData, 'base64');
-
-        // Load the base image
-        Jimp.read(baseImage)
-          .then(base => {
-            // Load the overlay image
-            Jimp.read(overlayImage).then(overlay => {
-              // Resize overlay to match base image, if necessary
-              overlay.resize(base.bitmap.width, Jimp.AUTO);
-
-              // Composite the overlay onto the base image
-              base.composite(overlay, 0, 0, {
-                mode: Jimp.BLEND_SOURCE_OVER,
-                opacitySource: 1.0,
-                opacityDest: 1.0
-              })
-                // Convert to buffer
-                .getBuffer(Jimp.MIME_PNG, (err, buffer) => {
-                  if (err) {
-                    reject(err);
-                  } else {
-                    // Convert buffer to base64
-                    let base64data = buffer.toString('base64');
-                    state.png64 = base64data;
-                    resolve(state);
-                  }
-                });
-            }).catch(e => {
-              console.error("Error loading overlay image:", e);
-              resolve(state);
-            });
-          })
-          .catch(e => {
-            console.error("Error loading base image:", e);
-            resolve(state);
-          });
-        return;
-
-      } else {
-        // fall back
-        state.png64 = this.layerImageData;
-      }
-
-    } else if (state.hasOwnProperty("imageName")) {
-      state.png64 = this.images[`${state.imageName}`];
-      delete state.imageName;
-    }
     return state;
-  }
-
-  removeAllKeysWithPrefix(prefix) {
-    for (const key in this.localFeedbackCache) {
-      if (key.startsWith(prefix)) delete this.localFeedbackCache[key];
-    }
   }
 
   /**
@@ -646,15 +664,41 @@ class CaptivateInstance extends InstanceBase {
     }
   }
 
+  cacheRemoveKeysWithPrefix(prefix) {
+    for (const key in this.localFeedbackCache) {
+      if (key.startsWith(prefix)) delete this.localFeedbackCache[key];
+    }
+  }
+
+  cacheStoreFromFullId(actorFeedbackId, options, state) {
+    const [aid, fid] = actorFeedbackId.split('~', 2);
+    return this.cacheStore(aid, fid, options, state);
+  }
+
+  cacheGetFromFullId(actorFeedbackId, options, state) {
+    const [aid, fid] = actorFeedbackId.split('~', 2);
+    return this.cacheGet(aid, fid, options);
+  }
+
+  cacheStore(actorId, feedbackId, options, state) {
+    const afid = [actorId, feedbackId].join('~');
+    const cachekey = makeCacheKeyUsingOptions(afid, options);
+    this.localFeedbackCache[cachekey] = state;
+  }
+
+  cacheGet(actorId, feedbackId, options) {
+    const afid = [actorId, feedbackId].join('~');
+    const cachekey = makeCacheKeyUsingOptions(afid, options);
+    return this.localFeedbackCache[cachekey];
+  }
+
   /**
    * 
    * @param {string} actorFeedbackId the actor feedback id is a full actorId with feedbackId separated by ~
    * @param {object} options any arbitrary set of data
    */
   primeFeedbackState(actorFeedbackId, options) {
-    let cacheKey = makeCacheKeyUsingOptions(actorFeedbackId, options);
-
-    let result = this.localFeedbackCache[cacheKey];
+    const result = this.cacheGetFromFullId(actorFeedbackId, options);
 
     if (result == undefined) {
       console.log("not in the cache");
@@ -685,21 +729,14 @@ class CaptivateInstance extends InstanceBase {
 
       // do we have a valid feedback id?
       if (actorId && feedbackId && feedbackId.match(/\.feedback\./)) {
-        let promise = new Promise((resolve, reject) => {
+        let promise = new Promise((resolve, _) => {
 
           // Ask Captivate for the latest details
           this.queryFeedbackDetails(actorId, feedbackId, miss.options)
             .then((reply) => {
               this.debug('feedback state received', reply);
-
-              var cacheKey = makeCacheKeyUsingOptions(miss.id, miss.options);
-
-              //console.log("received reply");
-              //console.log(JSON.stringify(reply));
-              // cache local results
-              this.localFeedbackCache[cacheKey] = reply;
+              this.cacheStore(actorId, feedbackId, miss.options, reply);
               resolve();
-
             }).catch((error) => {
               resolve();
             });
@@ -734,12 +771,9 @@ class CaptivateInstance extends InstanceBase {
     let cacheKey = makeCacheKeyUsingOptions(event.feedbackId, event.options);
 
     // lookup content in our local cache
-    let result = this.localFeedbackCache[cacheKey];
+    let result = this.cacheGetFromFullId(event.feedbackId, event.options);
 
     if (result != undefined) {
-
-      debug("found in cache");
-
       if (result.hasOwnProperty("imageName")) {
         var processedResult = {};
         Object.assign(processedResult, {...result});
@@ -776,7 +810,7 @@ class CaptivateInstance extends InstanceBase {
 
   stopCacheChecker() {
     if (this.cacheBuilder != undefined) {
-      clearInterval(this.cacheBuilder);
+      clearTimeout(this.cacheBuilder);
       delete this.cacheBuilder;
       this.cacheBuilder = undefined;
     }
@@ -788,8 +822,8 @@ class CaptivateInstance extends InstanceBase {
     if (this.cacheMisses.length > 0) {
       // let's periodically try to make a connection again
       this.rebuildFeedbackCache();
-      this.cacheBuilder = setInterval(() => {
-        this.rebuildFeedbackCache();
+      this.cacheBuilder = setTimeout(() => {
+        this.startCacheChecker();
       }, 500);
     }
   }
