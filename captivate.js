@@ -41,7 +41,7 @@ let debug = () => {}
  * Returns a function that will remember its own debounce timer
  * and will only allow the last call per timeout.
  */
-debounce = function (func, timeout = 1000) {
+function debounce(func, timeout = 1000) {
   let timer;
   return (...args) => {
     clearTimeout(timer);
@@ -51,11 +51,19 @@ debounce = function (func, timeout = 1000) {
   };
 }
 
-makeCacheKeyUsingOptions = function (key, options) {
+/**
+ * A hash will be created from the stringified object.
+ * 
+ * @param {string} key the key is usually the full actor/feedback id (ids separated by '~')
+ * @param {object} options
+ * @returns 
+ */
+function makeCacheKeyUsingOptions(key, options) {
   let cacheKey = key;
 
   if (options && Object.keys(options).length) {
-    let vals = {...options};
+    let vals = {...options}; // what's the point of this?
+
     // delete any params that shouldn't affect the results
     const optionsHash = crypto.createHash('md5').update(JSON.stringify(vals)).digest('hex');
     cacheKey = `${cacheKey}+${optionsHash}`;
@@ -65,14 +73,6 @@ makeCacheKeyUsingOptions = function (key, options) {
 
   return cacheKey;
 };
-
-async function promised(func, ...args) {
-  return new Promise((resolve, reject) => {
-    // for scheduler calls, the last argument is a callback.
-    args.push(e => {resolve(e)});
-    func(...args)
-  });
-}
 
 function promiseify(func) {
   return (...args) => {
@@ -87,12 +87,6 @@ function promiseify(func) {
     });
   }
 }
-
-let cacheBuilder = undefined;
-let allowsFeedbackCacheRebuilding = false;
-
-let scheduler = {};
-
 
 class CaptivateInstance extends InstanceBase {
   /** @var {Object} sp Version of the scheduler where all the functions have been wrapped with promises */
@@ -120,8 +114,15 @@ class CaptivateInstance extends InstanceBase {
     this.titlesPlayStatus = []
     this.titlesImage = []
 
+    /**
+     * The local feedback cache retains the last feedback state for feedbacks
+     * according to the id of the feedback.
+     */
     this.localFeedbackCache = {};
     this.pendingFeedbackChanges = {};
+
+    /** @type {Map<string, object[]>} - key is the feedbackId, the value is a list of instance ids */
+    this.feedbackInstances = new Map();
 
     this.cacheMisses = [];
     this.images = {};
@@ -139,21 +140,21 @@ class CaptivateInstance extends InstanceBase {
   async init(config) {
     this.CHOICES_TITLES = [{id: 0, label: 'no titles loaded yet', play: 'Done'}];
     this.on_air_status = [];
-    debug = (s) => this.log('debug', 'CAPTIVATE:\n' + typeof s == 'string' ? s : JSON.stringify(s));
+    this.debug = debug = (...args) => args.forEach(s => this.log('debug', 'CAPTIVATE:\n' + typeof s == 'string' ? s : JSON.stringify(s, undefined, 2)));
 
     this.configUpdated(config);
   }
 
   // Called when module gets deleted
   async destroy() {
-    this.log('debug', 'destroy')
+    this.debug('destroy called');
   }
 
   async configUpdated(config) {
     this.config = config
     this.config.needsNewConfig = false;
-    debug('Configuration Changed');
-    debug(config);
+    this.debug('Configuration Changed');
+    this.debug(config);
     if (this.USE_QWEBCHANNEL) {
       this.initQWebChannel();
     } else {
@@ -163,7 +164,7 @@ class CaptivateInstance extends InstanceBase {
 
   async refreshIntegrations() {
 
-    this.allowsFeedbackCacheRebuilding = true;
+    this.allowsFeedbackCacheRebuilding = true; // will be changed from feedbacks.js
 
     await this.getCurrentTitles();
     this.setupFeedbacks();
@@ -209,7 +210,7 @@ class CaptivateInstance extends InstanceBase {
       // Establish API connection.
       new QWebChannelEx(socket, async (channel) => {
         // global and class scheduler objects
-        this.scheduler = scheduler = channel.objects.scheduler;
+        this.scheduler = channel.objects.scheduler;
 
         // wrap scheduler functions in promises... do this first!
         this.wrapScheduler();
@@ -234,8 +235,8 @@ class CaptivateInstance extends InstanceBase {
           }
         */
         this.hostVersionInfo = JSON.parse(reply);
-        this.log("debug", `Captivate: Host data:`);
-        this.log("debug", reply);
+        debug(`Captivate: Host data:`);
+        debug(this.hostVersionInfo);
 
         // tell companion we connected successfully
         this.updateStatus(InstanceStatus.Ok);
@@ -267,6 +268,7 @@ class CaptivateInstance extends InstanceBase {
 
   } // end: initQWebChannel
 
+  /** wrap the scheduler functions in promises so we can use them with async/await paradigms */
   wrapScheduler() {
     this.scheduler.promised = {}
     for (let [k, v] of Object.entries(this.scheduler)) {
@@ -281,6 +283,7 @@ class CaptivateInstance extends InstanceBase {
     this.sp = this.scheduler.promised;
   }
 
+  /** Requests the automation images from the Captivate backend. */
   async getImageSet() {
     // companion will assume it's png data
     const includeMimePrefix = false;
@@ -289,17 +292,27 @@ class CaptivateInstance extends InstanceBase {
     Object.assign(this.images, reply);
   }
 
+  /**
+   * Creates a Companion-style variable definition from a Captivate title and variable name.
+   * 
+   * @param {string} title A Captivate title object
+   * @param {string} varname A Captivate variable name
+   * @returns 
+   */
   makeVarDefinition(title, varname) {
     const name = `${title.name}: ${varname}` // the label
     const variableId = `${title.name}__${varname}`.toLowerCase().replace(/[^a-zA-Z0-9]/g, '_')
     return {name, variableId}
   }
 
-  makeCustomActionId(shortId) {
-    return 'newblue.automation.js.' + shortId;
+  // only visible to companion, so it doesn't have to follow the entire newblue action schema
+  makeCustomActionId(actionName) {
+    return `newblue.automation.js.${actionName}`;
   }
-  makeCustomFeedbackId(shortId) {
-    return 'newblue.automation.js.feedback.' + shortId;
+
+  // only visible to companion, so it doesn't have to follow the entire newblue action schema
+  makeCustomFeedbackId(type, feedbackName) {
+    return `newblue.automation.js.feedback.${type}.${feedbackName}`;
   }
 
   /**
@@ -375,9 +388,14 @@ class CaptivateInstance extends InstanceBase {
 
       this.pendingFeedbackChanges[feedbackKey] = "stale";
 
-      //checkFeedbacksById doesn't seem to work.. lets brute force it for now
-      //this.checkFeedbacksById( [feedbackKey]);
-      this.checkFeedbacks();
+      // console.log(this._getAllFeedbacks());
+
+      // checkFeedbacksById expects to be called with the actual, internal ids
+      // of each feedback instance, not the `feedbackId` that we created for the
+      // feedback type.
+      const instances = this.feedbackInstances.get(feedbackKey);
+      if (instances) {this.checkFeedbacksById(...instances);}
+      else this.checkFeedbacks();
     });
 
     // When Captivate issues a data event
@@ -387,7 +405,7 @@ class CaptivateInstance extends InstanceBase {
 
   handleNotification(msg) {
     try {
-      let {command, event, id, variables} = JSON.parse(msg);
+      let {event, id, variables} = JSON.parse(msg);
       if (event == 'data' && id && variables && this.titlesById[id]) {
         let title = this.titlesById[id]
         for (let {name, value} of variables) {
@@ -421,6 +439,13 @@ class CaptivateInstance extends InstanceBase {
     }
   }
 
+  /**
+   * Request actions, presets, feedbacks, etc from Captivate. These will be parsed into real
+   * action, preset, feedback objects, and will be registered in the Companion system.
+   * 
+   * @param {'actions'|'presets'|'feedbacks'|'lastUpdateTimestamp'} kind gets current data from Captivate for presets, etc.
+   * @returns 
+   */
   async requestCompanionDefinition(kind) {
     // kind = 'actions' | 'presets' | 'feedbacks'
     let reply = await this.sp._cmp_v1_query(kind);
@@ -438,19 +463,29 @@ class CaptivateInstance extends InstanceBase {
     }
   }
 
-  async queryFeedbackState(actorId, feedbackId, options) {
+  /**
+   * This asks Captivate what the current value of this feedback should be.
+   * If the current feedback value should be an image, Captivate can push it to us.
+   * 
+   * This is the lower-level version of the call. In most cases, you want to use
+   * queryFeedbackDetails
+   * 
+   * @param {string} actorId the actor id will be connected to the feedbackId by a '~'
+   * @param {string} feedbackId 
+   * @param {object} options The options as they are set in the feedback object
+   * @returns {Promise<{[key: string]: string|number|boolean}>}
+   * @throws {string}
+   */
+  async _queryFeedbackState(actorId, feedbackId, options) {
     const reply = await this.sp._cmp_v1_queryFeedbackState(actorId, feedbackId, options);
     try {
       var value = JSON.parse(reply);
-
-      //console.log(`_cmp_v1_queryFeedbackState ${actorId} reply: `, reply);
+      debug({actorId, feedbackId, options, result: value});
 
       // query for our layer play states, we will use this to fold into our feedback state
-      const playStates = await this.sp.getValueForKey("newblue.automation.layerstate")
+      const playStates = await this.sp.getValueForKey("newblue.automation.layerstate");
 
-      //console.log(`playStates for ${actorId}`, playStates);
-
-      // do we have a dynamic image properties?
+      // did the feedback data include a dynamic image?
       if (value.hasOwnProperty("overlayQueryKey")) {
         let s = playStates[value.overlayQueryKey];
         if (s == undefined || !s.hasOwnProperty('playState')) {
@@ -510,40 +545,34 @@ class CaptivateInstance extends InstanceBase {
     }
   }
 
+  /**
+   * This is the higher level call to get feedback data from Captivate.
+   * 
+   * @param {string} actorId the actor id will be connected to the feedbackId by a '~'
+   * @param {string} feedbackId 
+   * @param {object} options The options as they are set in the feedback object
+   * @returns {Promise<{[key: string]: string|number|boolean}>}
+   * @throws {string}
+   */
   async queryFeedbackDetails(actorId, feedbackId, options) {
-    //console.log("Query feedback details", feedbackId);
     let state;
     try {
-      state = await this.queryFeedbackState(actorId, feedbackId, options);
+      state = await this._queryFeedbackState(actorId, feedbackId, options);
     } catch (e) {
       console.log("An error occurred", e);
       throw e;
     }
-    //console.log("_cmp_v1_queryFeedbackState: ", feedbackId, state);
 
+    // If the feedback specified an image name, attempt to load it from our local image cache.
     if (state.hasOwnProperty("overlayImageName")) {
       let layerImageData = this.images[`${state.overlayImageName}`];
-      delete state.layerImageName;
+      delete state.overlayImageName;
 
       if (!layerImageData) {
-        //console.log("bad layer data");
+        debug("bad layer data");
       } else if (state.hasOwnProperty("png64")) {
         const baseImage = Buffer.from(state.png64, 'base64');
         const overlayImage = Buffer.from(layerImageData, 'base64');
-
-        /*
-        const output = sharp(baseImage)
-            .composite([
-                { input: overlayImage, tile: true, blend: 'over' }
-            ]).toBuffer()
-            .then((buffer) => {
-                let base64data = buffer.toString('base64');
-                state.png64 = base64data;
-                resolve(state);
-            }).catch((e) => {
-                resolve(state);
-            });
-            */
 
         // Load the base image
         Jimp.read(baseImage)
@@ -606,7 +635,6 @@ class CaptivateInstance extends InstanceBase {
    *  This makes a lightweight call to the automation registry to look for any changes.
    */
   async checkForDefinitionUpdates() {
-
     if (this.USE_QWEBCHANNEL) {
       let response = await this.requestCompanionDefinition("lastUpdateTimestamp")
       console.log(response);
@@ -616,48 +644,55 @@ class CaptivateInstance extends InstanceBase {
         this.refreshIntegrations(this);
       }
     }
-
   }
 
-  primeFeedbackState(feedbackId, options) {
-    let cacheKey = makeCacheKeyUsingOptions(feedbackId, options);
+  /**
+   * 
+   * @param {string} actorFeedbackId the actor feedback id is a full actorId with feedbackId separated by ~
+   * @param {object} options any arbitrary set of data
+   */
+  primeFeedbackState(actorFeedbackId, options) {
+    let cacheKey = makeCacheKeyUsingOptions(actorFeedbackId, options);
 
     let result = this.localFeedbackCache[cacheKey];
 
     if (result == undefined) {
       console.log("not in the cache");
-      this.cacheMisses.push({id: feedbackId, options});
+      this.cacheMisses.push({id: actorFeedbackId, options});
     }
   }
 
-
+  /**
+   * Will ask Captivate for the current state of each registered feedback
+   * that isn't already in the cache.
+   */
   rebuildFeedbackCache() {
+    this.stopCacheChecker();
 
-    //console.log("Rebuild feedback cache");
     let promises = [];
 
     while (this.cacheMisses.length > 0) {
       let miss = this.cacheMisses.pop();
-      console.log("Miss:::", miss);
-
       if (!miss.id === undefined) continue;
+
+      debug('rebuildFeedbackCache for', miss);
 
       // clear out our pending feedback changes
       delete this.pendingFeedbackChanges[miss.id];
 
-      const components = miss.id.split("~");
-      if (components != undefined && components.length >= 2) {
-        const actorId = components[0];
-        const feedbackId = components[1];
+      // parse the id of the missing item
+      const [actorId, feedbackId] = miss.id.split('~', 2);
 
+      // do we have a valid feedback id?
+      if (actorId && feedbackId && feedbackId.match(/\.feedback\./)) {
         let promise = new Promise((resolve, reject) => {
 
+          // Ask Captivate for the latest details
           this.queryFeedbackDetails(actorId, feedbackId, miss.options)
             .then((reply) => {
+              this.debug('feedback state received', reply);
 
-              var feedbackKey = `${actorId}~${feedbackId}`;
-
-              var cacheKey = makeCacheKeyUsingOptions(feedbackKey, miss.options);
+              var cacheKey = makeCacheKeyUsingOptions(miss.id, miss.options);
 
               //console.log("received reply");
               //console.log(JSON.stringify(reply));
@@ -672,7 +707,6 @@ class CaptivateInstance extends InstanceBase {
 
         promises.push(promise);
       }
-
     }
 
     if (promises.length > 0) {
@@ -680,34 +714,31 @@ class CaptivateInstance extends InstanceBase {
         console.log("All promises resolved.. check feedbacks again!");
         this.checkFeedbacks();
       });
-
-    }
-    if (this.cacheBuilder) {
-      delete this.cacheBuilder;
-      this.cacheBuilder = undefined;
     }
   }
 
 
-
+  /**
+   * This will be used as the callback for a companion feedback.
+   * 
+   * @param {object} event 
+   * @returns 
+   */
   async handleFeedback(event) {
 
-    let options = event.options
+    debug("~~~~~~~~~~ Feedback Event ~~~~~~~~~~~~~~~");
+    debug(event);
+    debug("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~");
 
-    console.log("~~~~~~~~~~~~~");
-    console.log("--> in FeedBack", event);
-    console.log("~~~~~~~~~~~~~");
-
-
+    // the feedbackId will be the full actor/feedback id (actorId~feedbackId)
     let cacheKey = makeCacheKeyUsingOptions(event.feedbackId, event.options);
 
     // lookup content in our local cache
-
     let result = this.localFeedbackCache[cacheKey];
 
     if (result != undefined) {
 
-      console.log("found in cache");
+      debug("found in cache");
 
       if (result.hasOwnProperty("imageName")) {
         var processedResult = {};
@@ -724,46 +755,53 @@ class CaptivateInstance extends InstanceBase {
 
       if (this.pendingFeedbackChanges[event.feedbackId]) {
         this.cacheMisses.push({id: event.feedbackId, options: event.options});
-        console.log(`not in the cache: ${event.feedbackId} - ${JSON.stringify(event.options)}`);
+        debug(`not in the cache: ${event.feedbackId} - ${JSON.stringify(event.options)}`);
       }
       else {
-        console.log(`found in the cache: ${event.feedbackId} - ${JSON.stringify(event.options)}`);
+        debug(`found in the cache: ${event.feedbackId} - ${JSON.stringify(event.options)}`);
       }
 
     } else {
       // not in our cache, possibly because we've just started up
       // Ask Captivate to push it back to us, which will trigger a refresh
       this.cacheMisses.push({id: event.feedbackId, options: event.options});
-      console.log(`not in the cache: ${event.feedbackId} - ${JSON.stringify(event.options)}`);
+      debug(`not in the cache: ${event.feedbackId} - ${JSON.stringify(event.options)}`);
     }
 
+    this.startCacheChecker(); // does nothing unless there are cache misses
+    debug('result')
+    debug(result);
+    return event.type == 'boolean' ? !!result?.value : result;
+  }
+
+  stopCacheChecker() {
+    if (this.cacheBuilder != undefined) {
+      clearInterval(this.cacheBuilder);
+      delete this.cacheBuilder;
+      this.cacheBuilder = undefined;
+    }
+  }
+
+  startCacheChecker() {
+    this.stopCacheChecker();
 
     if (this.cacheMisses.length > 0) {
-
-      if (this.cacheBuilder != undefined) {
-        clearTimeout(this.cacheBuilder);
-        delete this.cacheBuilder;
-        this.cacheBuilder = undefined;
-      }
-
       // let's periodically try to make a connection again
-      cacheBuilder =
-        setInterval(() => {
-          this.rebuildFeedbackCache();
-        }, 500);
+      this.rebuildFeedbackCache();
+      this.cacheBuilder = setInterval(() => {
+        this.rebuildFeedbackCache();
+      }, 500);
     }
-
-    return result;
   }
 
   /**
- * Combine rgb components to a 24bit value (copied from lib/Resources/Util.js)
- * @param {number | string} r 0-255
- * @param {number | string} g 0-255
- * @param {number | string} b 0-255
- * @param {number} base
- * @returns {number | false}
- */
+   * Combine rgb components to a 24bit value (copied from lib/Resources/Util.js)
+   * @param {number | string} r 0-255
+   * @param {number | string} g 0-255
+   * @param {number | string} b 0-255
+   * @param {number} base
+   * @returns {number | false}
+   */
   rgb(r, g, b, base = 10) {
     // @ts-ignore
     r = parseInt(r, base)
@@ -775,8 +813,6 @@ class CaptivateInstance extends InstanceBase {
     if (isNaN(r) || isNaN(g) || isNaN(b)) return false
     return ((r & 0xff) << 16) | ((g & 0xff) << 8) | (b & 0xff)
   }
-
-
 } // end: CaptivateInstance
 
 
