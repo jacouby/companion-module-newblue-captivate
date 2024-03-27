@@ -399,10 +399,8 @@ class CaptivateInstance extends InstanceBase {
 
       // checkFeedbacksById expects to be called with the actual, internal ids
       // of each feedback instance, not the `feedbackId` that we created for the
-      // feedback type.
-      const instances = this.feedbackInstances.get(feedbackKey);
-      if (instances) {this.checkFeedbacksById(...instances);}
-      else this.checkFeedbacks();
+      // feedback type, that's why we update feedbacks this way.
+      this.checkFeedbacks();
     });
 
     // When Captivate issues a data event
