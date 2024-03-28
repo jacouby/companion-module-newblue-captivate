@@ -332,21 +332,29 @@ class CaptivateInstance extends InstanceBase {
     console.log(actionData);
   }
 
+  /**
+   * Gets all the information for the current project titles and uses that information to
+   * - cache the icons for each title -- TODO
+   * - set up companion variables for each title variable
+   * - set up companion variables for each data controller variable
+   */
   async getCurrentTitles() {
     const varDefinitions = [];
     this.varData = {};
     this.varValues = {};
-    const reply = await this.sp.scheduleCommand('getTitleControlInfo', {}, {});
+    const reply = await this.sp.scheduleCommand('getTitleControlInfo', {icon: 1, height: 72, width: 72}, {});
     try {
       const data = JSON.parse(reply)
       let varnames = new Set();
       this.titlesByName = {};
       this.titlesById = {};
+      this.titles.reverse(); // they always come in backward
       this.titles = data.titles ?? []
       this.titles.reverse();
       for (let title of this.titles) {
         this.titlesByName[title.name] = title;
         this.titlesById[title.id] = title;
+
         for (let variable of title.variables) {
           let def = this.makeVarDefinition(title, variable.variable);
           varDefinitions.push(def);
