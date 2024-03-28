@@ -36,6 +36,7 @@ const {reject} = require('lodash')
 const USE_QWEBCHANNEL = true;
 
 let debug = () => {}
+let error = () => {}
 
 /**
  * Returns a function that will remember its own debounce timer
@@ -143,6 +144,7 @@ class CaptivateInstance extends InstanceBase {
     this.CHOICES_TITLES = [{id: 0, label: 'no titles loaded yet', play: 'Done'}];
     this.on_air_status = [];
     this.debug = debug = (...args) => args.forEach(s => this.log('debug', 'CAPTIVATE:\n' + typeof s == 'string' ? s : JSON.stringify(s, undefined, 2)));
+    this.error = error = (...args) => args.forEach(s => this.log('error', 'CAPTIVATE:\n' + typeof s == 'string' ? s : JSON.stringify(s, undefined, 2)));
 
     this.configUpdated(config);
   }
@@ -328,9 +330,9 @@ class CaptivateInstance extends InstanceBase {
   }
 
   // handle actions that use similar callbacks
-  doAction(actionData) {
-    console.log(actionData);
-  }
+  // doAction(actionData) {
+  //   this.debug(actionData);
+  // }
 
   /**
    * Gets all the information for the current project titles and uses that information to
@@ -368,13 +370,14 @@ class CaptivateInstance extends InstanceBase {
 
 
       // setting variables doesn't seem to work
-      // console.log(varDefinitions);
-      // console.log(varValues);
+      // this.debug(varDefinitions);
+      // this.debug(varValues);
       this.setVariableDefinitions(varDefinitions);
       this.setVariableValues(this.varValues);
       // this.setVariableDefinitions([{name: 'cool variable', variableId: 'cool_variable'}]);
       // this.setVariableValues({'cool_variable': 'hello'})
     } catch (e) {
+      this.error(e);
       throw e;
     }
   }
@@ -385,7 +388,7 @@ class CaptivateInstance extends InstanceBase {
 
     // When Captivate's Companion registry changes
     this.sp._cmp_v1_handleActorRegistryChangeEvent.connect((elementId) => {
-      console.log(`****Registry updated`, elementId);
+      this.debug(`****Registry updated`, elementId);
       refreshCompanionDefinitions();
     });
 
@@ -393,8 +396,8 @@ class CaptivateInstance extends InstanceBase {
     this.sp._cmp_v1_handleFeedbackChangeEvent.connect(async (actorId, feedbackId, options, state) => {
 
       var feedbackKey = `${actorId}~${feedbackId}`;
-      console.log(`handle change: '${feedbackKey}'`, options);
-      console.log(state);
+      this.debug(`handle change: '${feedbackKey}'`, options);
+      this.debug(state);
 
       state = await this._handleFeedbackState(state);
 
@@ -403,7 +406,7 @@ class CaptivateInstance extends InstanceBase {
 
       this.pendingFeedbackChanges[feedbackKey] = "stale";
 
-      // console.log(this._getAllFeedbacks());
+      // this.debug(this._getAllFeedbacks());
 
       // checkFeedbacksById expects to be called with the actual, internal ids
       // of each feedback instance, not the `feedbackId` that we created for the
@@ -426,8 +429,8 @@ class CaptivateInstance extends InstanceBase {
         }
       }
 
-      // console.log(data);
-    } catch (e) {console.log(e)}
+      // this.debug(data);
+    } catch (e) {this.debug(e)}
   }
 
 
@@ -472,6 +475,7 @@ class CaptivateInstance extends InstanceBase {
         throw "Type not supported";
       }
     } catch (e) {
+      this.error(e);
       throw e;
     }
   }
@@ -576,12 +580,12 @@ class CaptivateInstance extends InstanceBase {
                     }
                   });
               }).catch(e => {
-                console.error("Error loading overlay image:", e);
+                this.error("Error loading overlay image:", e);
                 resolve(state);
               });
             })
             .catch(e => {
-              console.error("Error loading base image:", e);
+              this.error("Error loading base image:", e);
               resolve(state);
             });
         })
@@ -627,7 +631,7 @@ class CaptivateInstance extends InstanceBase {
       debug({actorId, feedbackId, options, result: state});
       return await this._handleFeedbackState(state);
     } catch (e) {
-      console.log(`Error parsing response for ${feedbackId}`);
+      this.debug(`Error parsing response for ${feedbackId}`);
       throw "Bogus response";
     }
   }
@@ -646,7 +650,7 @@ class CaptivateInstance extends InstanceBase {
     try {
       state = await this._queryFeedbackState(actorId, feedbackId, options);
     } catch (e) {
-      console.log("An error occurred", e);
+      this.debug("An error occurred", e);
       throw e;
     }
     return state;
@@ -661,7 +665,7 @@ class CaptivateInstance extends InstanceBase {
   async checkForDefinitionUpdates() {
     if (this.USE_QWEBCHANNEL) {
       let response = await this.requestCompanionDefinition("lastUpdateTimestamp")
-      console.log(response);
+      this.debug(response);
       var lastUpdate = new Date(response.lastUpdate);
       if (lastUpdate >= this.timeOfLastDefinitionUpdates) {
         this.timeOfLastDefinitionUpdates = lastUpdate;
@@ -707,7 +711,7 @@ class CaptivateInstance extends InstanceBase {
     const result = this.cacheGetFromFullId(actorFeedbackId, options);
 
     if (result == undefined) {
-      console.log("not in the cache");
+      this.debug("not in the cache");
       this.cacheMisses.push({id: actorFeedbackId, options});
     }
   }
@@ -754,7 +758,7 @@ class CaptivateInstance extends InstanceBase {
 
     if (promises.length > 0) {
       Promise.allSettled(promises).then((values) => {
-        console.log("All promises resolved.. check feedbacks again!");
+        this.debug("All promises resolved.. check feedbacks again!");
         this.checkFeedbacks();
       });
     }
@@ -785,11 +789,11 @@ class CaptivateInstance extends InstanceBase {
         Object.assign(processedResult, {...result});
         delete processedResult.imageName;
         let imageData = this.images[`${result.imageName}`];
-        //console.log('image data', imageData);
+        //this.debug('image data', imageData);
         if (imageData != undefined) {
           processedResult['png64'] = imageData;
         }
-        //console.log("returning processed result", processedResult);
+        //this.debug("returning processed result", processedResult);
         result = processedResult;
       }
 
