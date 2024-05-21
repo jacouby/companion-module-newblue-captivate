@@ -1,19 +1,22 @@
 {
-    "name": "newblue-captivate",
-    "version": "1.0.0",
-    "main": "captivate.js",
-    "scripts": {
-        "test": "echo \"Error: no test specified\" && exit 1"
-    },
-    "author": "adam (adamf@newblueinc.com)",
-    "license": "MIT",
-    "dependencies": {
-        "@companion-module/base": "~1.7.0",
-        "jimp": "^0.22.10",
-        "lodash": "^4.17.21",
-        "ws": "^7.4.6"
-    },
-    "devDependencies": {
-        "@companion-module/tools": "^1.5.0"
-    }
+	"name": "newblue-captivate",
+	"version": "1.0.2",
+	"main": "captivate.js",
+	"scripts": {
+		"test": "echo \"Error: no test specified\" && exit 1",
+		"format": "prettier -w .",
+		"package": "companion-module-build"
+	},
+	"author": "adam (adamf@newblueinc.com)",
+	"license": "MIT",
+	"dependencies": {
+		"@companion-module/base": "~1.7.0",
+		"jimp": "^0.22.10",
+		"lodash": "^4.17.21",
+		"ws": "^7.4.6"
+	},
+	"devDependencies": {
+		"@companion-module/tools": "^1.5.0"
+	},
+	"prettier": "@companion-module/tools/.prettierrc.json"
 }
