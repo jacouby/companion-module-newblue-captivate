@@ -3,11 +3,15 @@
 	"name": "newblue-captivate",
 	"shortname": "Captivate",
 	"description": " NewBlue Captivate",
-	"version": "1.0.3",
+	"version": "1.0.4",
 	"license": "MIT",
 	"repository": "https://github.com/bitfocus/companion-module-newblue-captivate.git",
 	"bugs": "https://github.com/bitfocus/companion-module-newblue-captivate/issues",
 	"maintainers": [
+		{
+			"name": "jeff",
+			"email": "jeffm@newblueinc.com"
+		},
 		{
 			"name": "adam"
 		}
