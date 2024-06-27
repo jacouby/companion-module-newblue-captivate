@@ -11,13 +11,13 @@ If you are downloading one of our [binary releases](https://github.com/NewBlueFX
 1. Create a folder anywhere on your computer and name it `Companion Modules` (or anything you want).
 2. Download the zip file for the [latest release](https://github.com/NewBlueFX/companion-module-newblue-captivate/releases).
 3. Extract the zip file. You should have a folder named `companion-module-newblue-captivate` when you are done.
-4. Open the folder and make sure it contains the `captivate.js` file. On some systems, the folder will contain an inner folder named `companion-module-newblue-captivate` and _that_ folder will have the `captivate.js` file. The folder with `captivate.js` is the real one to use.
+4. Open the folder and make sure it contains the `package.json` file. On some systems, the folder will contain an inner folder named `companion-module-newblue-captivate` and _that_ folder will have the `package.json` file. The folder with `package.json` is the real one to use.
 5. Put the correct `companion-module-newblue-captivate` folder into the `Companion Modules` folder you made earlier.
 
 - The file structure should therefore be:
   - `Companion Modules`
     - `companion-module-newblue-captivate`
-      - `captivate.js`
+      - `package.json`
 
 6. Launch Companion and open the GUI.
 7. Once you have the companion launcher open, click the cog in the top right. This will reveal a 'Developer modules path' field. Use this to select the `Companion Modules` folder you created earlier. (Similar to their instructions here: [Companion Module Wiki](https://github.com/bitfocus/companion-module-base/wiki#5-launch-and-setup-companion))
