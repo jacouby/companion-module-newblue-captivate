@@ -7,6 +7,16 @@
  */
 
 /**
+ * For information on what the companion base module can do, see:
+ *
+ * https://github.com/bitfocus/companion-module-base/blob/main/CHANGELOG.md
+ *
+ * and
+ *
+ * https://github.com/bitfocus/companion-module-base/blob/main/README.md
+ */
+
+/**
  * JSDoc types
  *
  * @import {CompanionActionDefinition, CompanionFeedbackDefinition, CompanionFeedbackInfo} from '@companion-module/base'
