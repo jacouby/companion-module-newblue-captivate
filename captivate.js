@@ -1,6 +1,6 @@
 /**
  * @module  companion-module-newblue-captivate
- * @author  NewBlue (https://www.newbluefx.com)
+ * @author  NewBlue https://www.newbluefx.com
  * @details Connects Companion to Captivate (Titler Live)
  * @version 3.0
  * @license MIT
@@ -9,7 +9,15 @@
 /**
  * JSDoc types
  *
- * @typedef {import('@companion-module/base').CompanionActionDefinition} CompanionActionDefinition
+ * @import {CompanionActionDefinition, CompanionFeedbackDefinition, CompanionFeedbackInfo} from '@companion-module/base'
+ *
+ * typedef {import('@companion-module/base').CompanionActionDefinition} CompanionActionDefinition
+ * typedef {import('@companion-module/base').CompanionFeedbackDefinition} CompanionFeedbackDefinition
+ * typedef {import('@companion-module/base').CompanionFeedbackInfo} CompanionFeedbackInfo
+ * typedef {import('@companion-module/base').CompanionFeedbackInfo} CompanionFeedbackInfo
+ * typedef {import('@companion-module/base').CompanionFeedbackInfo} CompanionFeedbackInfo
+ * typedef {import('@companion-module/base').CompanionFeedbackInfo} CompanionFeedbackInfo
+ *
  */
 
 /** Imports */
@@ -28,27 +36,11 @@ const QWebChannelEx = require('./contrib/qwebchannel').QWebChannel
 const WebSocket = require('ws')
 const crypto = require('crypto')
 const Jimp = require('jimp')
-const { EventEmitter } = require('stream')
-const { reject } = require('lodash')
 
 const USE_QWEBCHANNEL = true
 
 let debug = () => {}
 let error = () => {}
-
-// /**
-//  * Returns a function that will remember its own debounce timer
-//  * and will only allow the last call per timeout.
-//  */
-// function debounce(func, timeout = 1000) {
-// 	let timer
-// 	return (...args) => {
-// 		clearTimeout(timer)
-// 		timer = setTimeout(() => {
-// 			func(...args)
-// 		}, timeout)
-// 	}
-// }
 
 /**
  * A hash will be created from the stringified object.
@@ -61,11 +53,10 @@ function makeCacheKeyUsingOptions(key, options) {
 	let cacheKey = key
 
 	if (options && Object.keys(options).length) {
-		let vals = { ...options } // shallow copy
-
 		// delete any params that shouldn't affect the results
-		const optionsHash = crypto.createHash('md5').update(JSON.stringify(vals)).digest('hex')
-		cacheKey = `${cacheKey}+${optionsHash}`
+		// const optionsHash = crypto.createHash('md5').update(JSON.stringify(options)).digest('hex')
+		// cacheKey = `${cacheKey}+${optionsHash}`
+		cacheKey = `${cacheKey}+${JSON.stringify(options)}`
 	}
 	// debug('=== making cache key =================')
 	// debug('making cache key for:', key, options)
@@ -122,12 +113,16 @@ class CaptivateInstance extends InstanceBase {
 		 * according to the id of the feedback.
 		 */
 		this.localFeedbackCache = {}
-		this.pendingFeedbackChanges = {}
+
+		/**
+		 * The pendingFeedbackChanges object is used to track feedbacks that have changed but haven't been sent to Companion yet.
+		 */
+		this.pendingFeedbackChanges = new Map()
+		this.cacheMisses = new Map()
 
 		/** @type {Map<string, object[]>} - key is the feedbackId, the value is a list of instance ids */
 		this.feedbackInstances = new Map()
 
-		this.cacheMisses = []
 		this.images = {}
 
 		this.titlesByName = {}
@@ -384,29 +379,45 @@ class CaptivateInstance extends InstanceBase {
 
 	connectCallbacks() {
 		// connect our callbacks
-		let refresh_debounce = 0
 
-		// When Captivate's Companion registry changes
+		let refresh_debounce = 0
 		this.sp._cmp_v1_handleActorRegistryChangeEvent.connect((elementId) => {
-			this.debug(`****Registry updated`, elementId)
-			if (refresh_debounce) clearTimeout(refresh_debounce)
+			// this method runs the first one and then ignores all subsequent calls for 1000ms
+			if (refresh_debounce) return //clearTimeout(refresh_debounce)
+			console.log(`****Registry updated`, elementId)
+			this.refreshIntegrations()
 			refresh_debounce = setTimeout(() => {
-				this.refreshIntegrations()
+				refresh_debounce = 0
 			}, 1000)
 		})
 
 		// When Captivate changes a feedback item.
+		const last_feedback_times = {}
 		this.sp._cmp_v1_handleFeedbackChangeEvent.connect(async (actorId, feedbackId, options, state) => {
-			var feedbackKey = `${actorId}~${feedbackId}`
-			this.debug(`handle change: '${feedbackKey}'`, options)
-			this.debug(state)
+			const feedbackKey = `${actorId}~${feedbackId}`
+			const optionsString = JSON.stringify(options)
+			const debounceKey = feedbackKey + optionsString
+			// const now = Date.now()
+			// const last_time = last_feedback_times[debounceKey] ?? 0
+			// const debounceTime = 1000
+			// if (now - last_time < debounceTime) {
+			// 	this.debug(`handleFeedbackChangeEvent came too quickly... ignoring this event:\n${debounceKey}`)
+			// 	return
+			// }
+			// last_feedback_times[debounceKey] = now
 
-			state = await this._handleFeedbackState(state)
+			this.pendingFeedbackChanges.set(feedbackKey, true)
+
+			// this.debug(`handle feedback change: '${feedbackKey}'`, options)
+			// this.debug({state})
+
+			// transform the state into a format that Companion can use
+			if (Object.keys(state).length > 0) {
+				state = await this._handleFeedbackState(state)
+			}
 
 			// put this state into the cache
 			this.cacheStore(actorId, feedbackId, options, state)
-
-			this.pendingFeedbackChanges[feedbackKey] = 'stale'
 
 			// this.debug(this._getAllFeedbacks());
 
@@ -573,16 +584,20 @@ class CaptivateInstance extends InstanceBase {
 											opacityDest: 1.0,
 										})
 										// Convert to buffer
-										.getBuffer(Jimp.MIME_PNG, (err, buffer) => {
-											if (err) {
-												reject(err)
-											} else {
-												// Convert buffer to base64
-												let base64data = buffer.toString('base64')
-												state.png64 = base64data
-												resolve(state)
-											}
+										.getBase64(Jimp.MIME_PNG, (result) => {
+											state.png64 = result
+											resolve(state)
 										})
+									// .getBuffer(Jimp.MIME_PNG, (err, buffer) => {
+									// 	if (err) {
+									// 		reject(err)
+									// 	} else {
+									// 		// Convert buffer to base64
+									// 		let base64data = buffer.toString('base64')
+									// 		state.png64 = base64data
+									// 		resolve(state)
+									// 	}
+									// })
 								})
 								.catch((e) => {
 									this.error('Error loading overlay image:', e)
@@ -605,7 +620,16 @@ class CaptivateInstance extends InstanceBase {
 		return state
 	}
 
+	/**
+	 * This function takes the feedback state that comes from Captivate, and does the following:
+	 * 1. convert the Captivate feedback data into a format that Companion can use
+	 * 2. if the feedback data includes an image, handle it.
+	 *
+	 * @param {*} state
+	 * @returns
+	 */
 	async _handleFeedbackState(state) {
+		// first, handle the items that are Captivate Specific
 		if (state.overlayQueryKey || state.pngQueryKey) {
 			state = await this._handleFeedbackOverlayPlayStates(state)
 			debug('state with overlay information', state)
@@ -613,7 +637,53 @@ class CaptivateInstance extends InstanceBase {
 		if (state.overlayImageName || state.imageName) {
 			state = await this._handleFeedbackOverlayImage(state)
 		}
-		return state
+
+		return this._adaptToCompanionFeedback(state)
+	}
+
+	/**
+	 *
+	 * The advanced feedbacks can also take an `imageBuffer` (Uint8Array), and an `imagePosition` value. See the `CompanionAdvancedFeedbackResult` type for more.
+	 * @param {*} state The state that comes from Captivate. It could have any number of fields, but we only care about the ones that are relevant to Companion.
+	 * @returns {import('@companion-module/base').CompanionFeedbackButtonStyleResult|import('@companion-module/base').CompanionAdvancedFeedbackResult}
+	 */
+	async _adaptToCompanionFeedback(state) {
+		let result = {}
+		for (let property of [
+			'text',
+			'size',
+			'color',
+			'bgcolor',
+			'alignment',
+			'png64',
+			'pngalignment',
+			'show_topbar',
+			/* advanced only */
+			'imageBuffer',
+			'imagePosition',
+		]) {
+			if (state.hasOwnProperty(property)) {
+				result[property] = state[property]
+			}
+		}
+
+		// we can pass raw base 64 image data to Companion using the image64 property
+		if (state.image64) {
+			result.png64 = state.image64
+		}
+
+		// we can pass other image data to Companion using imageNames, imagePath, or imageUrl (png64 will take precedence)
+		let imageKey = state.imageName || state.imageUrl || state.imagePath
+		if (imageKey) {
+			this.debug('requesting image data from cache', imageKey)
+			const imageData = await this.getCachedImageData(imageKey)
+			this.debug('image data', imageData)
+			if (imageData != undefined) {
+				result.png64 ??= imageData
+			}
+		}
+
+		return result
 	}
 
 	/**
@@ -633,7 +703,7 @@ class CaptivateInstance extends InstanceBase {
 		const reply = await this.sp._cmp_v1_queryFeedbackState(actorId, feedbackId, options)
 		try {
 			var state = JSON.parse(reply)
-			debug({ actorId, feedbackId, options, result: state })
+			this.debug({ actorId, feedbackId, options, result: state })
 			return await this._handleFeedbackState(state)
 		} catch (e) {
 			this.debug(`Error parsing response for ${feedbackId}`)
@@ -686,25 +756,23 @@ class CaptivateInstance extends InstanceBase {
 	}
 
 	cacheStoreFromFullId(actorFeedbackId, options, state) {
-		const [aid, fid] = actorFeedbackId.split('~', 2)
-		return this.cacheStore(aid, fid, options, state)
-	}
-
-	cacheGetFromFullId(actorFeedbackId, options, state) {
-		const [aid, fid] = actorFeedbackId.split('~', 2)
-		return this.cacheGet(aid, fid, options)
+		const cachekey = makeCacheKeyUsingOptions(actorFeedbackId, options)
+		this.localFeedbackCache[cachekey] = state
 	}
 
 	cacheStore(actorId, feedbackId, options, state) {
 		const afid = [actorId, feedbackId].join('~')
-		const cachekey = makeCacheKeyUsingOptions(afid, options)
-		this.localFeedbackCache[cachekey] = state
+		this.cacheStoreFromFullId(afid, options, state)
+	}
+
+	cacheGetFromFullId(actorFeedbackId, options) {
+		const cachekey = makeCacheKeyUsingOptions(actorFeedbackId, options)
+		return [cachekey, this.localFeedbackCache[cachekey]]
 	}
 
 	cacheGet(actorId, feedbackId, options) {
 		const afid = [actorId, feedbackId].join('~')
-		const cachekey = makeCacheKeyUsingOptions(afid, options)
-		return this.localFeedbackCache[cachekey]
+		return this.cacheGetFromFullId(afid, options)
 	}
 
 	/**
@@ -713,110 +781,176 @@ class CaptivateInstance extends InstanceBase {
 	 * @param {object} options any arbitrary set of data
 	 */
 	primeFeedbackState(actorFeedbackId, options) {
-		const result = this.cacheGetFromFullId(actorFeedbackId, options)
+		const [cacheKey, result] = this.cacheGetFromFullId(actorFeedbackId, options)
 
 		if (result == undefined) {
 			this.debug('not in the cache')
-			this.cacheMisses.push({ id: actorFeedbackId, options })
+			this.cacheMisses.set(cacheKey, { id: actorFeedbackId, options })
 		}
 	}
 
 	/**
 	 * Will ask Captivate for the current state of each registered feedback
 	 * that isn't already in the cache.
+	 *
+	 * This function doesn't send feedbacks to companion, it just updates the cache.
 	 */
-	rebuildFeedbackCache() {
-		this.stopCacheChecker()
+	async requestMissingFeedbacks() {
+		if (this.doingRebuild) return
+		this.doingRebuild = true
 
 		let promises = []
 
-		while (this.cacheMisses.length > 0) {
-			let miss = this.cacheMisses.pop()
-			if (!miss.id === undefined) continue
+		// clear out any previously pending feedback changes since we are loading a new version now
+		this.pendingFeedbackChanges.clear()
+		while (this.cacheMisses.size > 0) {
+			for (let cacheKey of this.cacheMisses.keys()) {
+				const miss = this.cacheMisses.get(cacheKey) ?? {}
+				this.cacheMisses.delete(cacheKey)
+				if (!miss.id) continue
 
-			debug('rebuildFeedbackCache for: ' + miss.id)
+				console.log('rebuildFeedbackCache for: ' + miss.id)
 
-			// clear out our pending feedback changes
-			delete this.pendingFeedbackChanges[miss.id]
+				// parse the id of the missing item
+				const [actorId, feedbackId] = miss.id.split('~', 2)
 
-			// parse the id of the missing item
-			const [actorId, feedbackId] = miss.id.split('~', 2)
+				// do we have a valid feedback id?
+				if (actorId && feedbackId && feedbackId.match(/\.feedback\./)) {
+					let promise = new Promise((resolve, _) => {
+						// Ask Captivate for the latest details
+						this.queryFeedbackDetails(actorId, feedbackId, miss.options)
+							.then((reply) => {
+								this.debug('feedback state received', reply)
+								this.cacheStoreFromFullId(miss.id, miss.options, reply)
+								resolve(miss.id)
+							})
+							.catch((error) => {
+								this.debug(error)
+								resolve(null)
+							})
+					})
 
-			// do we have a valid feedback id?
-			if (actorId && feedbackId && feedbackId.match(/\.feedback\./)) {
-				let promise = new Promise((resolve, _) => {
-					// Ask Captivate for the latest details
-					this.queryFeedbackDetails(actorId, feedbackId, miss.options)
-						.then((reply) => {
-							this.debug('feedback state received', reply)
-							this.cacheStore(actorId, feedbackId, miss.options, reply)
-							resolve()
-						})
-						.catch((error) => {
-							resolve()
-						})
-				})
-
-				promises.push(promise)
+					promises.push(promise)
+				}
 			}
 		}
 
 		if (promises.length > 0) {
-			Promise.allSettled(promises).then((values) => {
-				this.debug('All promises resolved.. check feedbacks again!')
-				this.checkFeedbacks()
+			await Promise.all(promises).then((successfulIds) => {
+				// console.log('Feedback cache has been rebuilt... running checkFeedbacks again!')
+				// this.checkFeedbacks()
+				successfulIds = successfulIds.filter((e) => e != null)
+				this.checkFeedbacksById(successfulIds)
 			})
+		}
+
+		this.doingRebuild = false
+	}
+
+	async getCachedImageData(namePathOrUrl, { label = 'hello' } = {}) {
+		console.log('getCachedImageData', namePathOrUrl)
+		if (this.images[namePathOrUrl]) {
+			return this.images[namePathOrUrl]
+		}
+
+		let image
+		try {
+			image = await Jimp.read(namePathOrUrl) // jimp can do urls, paths, and base64
+		} catch (e) {
+			// console.log(e)
+			console.error('Error loading image:', namePathOrUrl)
+			return undefined
+		}
+
+		if (image) {
+			image.cover(72, 72)
+			if (label) {
+				// for future use... this is how you fill an area with alpha so that
+				// our nice blue background can shine through
+				// fill rectangle with black
+				// image.scan(0, 72 - 14, 72, 14, function (x, y, offset) {
+				// 	this.bitmap.data.writeUInt32BE(0x00000088, offset, true)
+				// })
+			}
+			const base64 = await image.getBase64Async(Jimp.MIME_PNG)
+			this.images[namePathOrUrl] = base64
+			return base64
 		}
 	}
 
 	/**
 	 * This will be used as the callback for a companion feedback.
 	 *
-	 * @param {object} event
+	 * @param {import('@companion-module/base').CompanionFeedbackBooleanEvent|import('@companion-module/base').CompanionFeedbackAdvancedEvent} event
 	 * @returns
 	 */
-	async handleFeedback(event) {
-		debug('~~~~~~~~~~ Feedback Event ~~~~~~~~~~~~~~~')
-		debug(event)
-		debug('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
+	async handleFeedbackRequest(event) {
+		// if (!this.pendingFeedbackChanges.get(event.feedbackId)) return {}
+		// delete this.pendingFeedbackChanges[event.feedbackId]
+
+		// debug('~~~~~~~~~~ Feedback Callback ~~~~~~~~~~~~')
+		// debug(event)
+		// debug('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
 
 		// the feedbackId will be the full actor/feedback id (actorId~feedbackId)
 		// let cacheKey = makeCacheKeyUsingOptions(event.feedbackId, event.options)
 
 		// lookup content in our local cache
-		let result = this.cacheGetFromFullId(event.feedbackId, event.options)
+		let [cacheKey, result] = this.cacheGetFromFullId(event.feedbackId, event.options)
 
+		// if (result == undefined || this.pendingFeedbackChanges[event.feedbackId]) {
+		// 	// this was a cache miss...
+		// 	// not in our cache, possibly because we've just started up
+		// 	// Ask Captivate to push it back to us, which will trigger a refresh
+		// 	this.cacheMisses.set(event.feedbackId, { id: event.feedbackId, options: event.options })
+		// 	this.debug(
+		// 		`not in cache or cache out of date, scheduling for later lookup: ${event.feedbackId} - ${JSON.stringify(
+		// 			event.options
+		// 		)}`
+		// 	)
+		// 	return event.type == 'boolean' ? false : {}
+		// } else {
+		// 	debug(`found in the cache: ${event.feedbackId} - ${JSON.stringify(event.options)}`)
+		// }
+
+		/**
+		 * The following code was used to coerce the cache result into a format that Companion can use. However,
+		 * This caused images to be processed too often. This has been refactored so that processing is done
+		 * before the data gets stored in our local cache.
+		 */
 		if (result != undefined) {
-			if (result.hasOwnProperty('imageName')) {
+			let imageKey = result.imageName || result.imageUrl || result.imagePath
+			if (imageKey) {
 				var processedResult = {}
 				Object.assign(processedResult, { ...result })
 				delete processedResult.imageName
-				let imageData = this.images[`${result.imageName}`]
-				//this.debug('image data', imageData);
+				let imageData = await this.getCachedImageData(imageKey)
+				// this.debug('image data', imageData)
 				if (imageData != undefined) {
 					processedResult['png64'] = imageData
 				}
-				//this.debug("returning processed result", processedResult);
+				// this.debug('returning processed result', processedResult)
 				result = processedResult
 			}
 
-			if (this.pendingFeedbackChanges[event.feedbackId]) {
-				this.cacheMisses.push({ id: event.feedbackId, options: event.options })
-				debug(`updating cache: ${event.feedbackId} - ${JSON.stringify(event.options)}`)
-			} else {
-				debug(`found in the cache: ${event.feedbackId} - ${JSON.stringify(event.options)}`)
-			}
+			// if (this.pendingFeedbackChanges[event.feedbackId]) {
+			// 	this.cacheMisses.set(event.feedbackId, { id: event.feedbackId, options: event.options })
+			// 	debug(`updating cache: ${event.feedbackId} - ${JSON.stringify(event.options)}`)
+			// } else {
+			// 	// debug(`found in the cache: ${event.feedbackId} - ${JSON.stringify(event.options)}`)
+			// }
 		} else {
 			// not in our cache, possibly because we've just started up
 			// Ask Captivate to push it back to us, which will trigger a refresh
-			this.cacheMisses.push({ id: event.feedbackId, options: event.options })
+			this.cacheMisses.set(cacheKey, { id: event.feedbackId, options: event.options })
 			debug(`not in the cache: ${event.feedbackId} - ${JSON.stringify(event.options)}`)
 		}
 
 		this.startCacheChecker() // does nothing unless there are cache misses
+
 		if (result != undefined) {
-			debug('result: ')
-			debug(result)
+			// debug('feedback state: ')
+			// debug(result)
 		}
 		return event.type == 'boolean' ? !!result?.value : result
 	}
@@ -832,10 +966,10 @@ class CaptivateInstance extends InstanceBase {
 	startCacheChecker() {
 		this.stopCacheChecker()
 
-		if (this.cacheMisses.length > 0) {
+		if (this.cacheMisses.size > 0) {
 			// let's periodically try to make a connection again
 			this.cacheBuilder = setTimeout(() => {
-				this.rebuildFeedbackCache()
+				this.requestMissingFeedbacks()
 				this.startCacheChecker()
 			}, 500)
 		}
@@ -861,5 +995,75 @@ class CaptivateInstance extends InstanceBase {
 		return ((r & 0xff) << 16) | ((g & 0xff) << 8) | (b & 0xff)
 	}
 } // end: CaptivateInstance
+
+/**
+ * Combine rgb components to a 24bit value (copied from lib/Resources/Util.js)
+ * @param {number | string} r 0-255
+ * @param {number | string} g 0-255
+ * @param {number | string} b 0-255
+ * @param {number} base
+ * @returns {number | false}
+ */
+function rgb(r, g, b, base = 10) {
+	// @ts-ignore
+	r = parseInt(r, base)
+	// @ts-ignore
+	g = parseInt(g, base)
+	// @ts-ignore
+	b = parseInt(b, base)
+
+	if (isNaN(r) || isNaN(g) || isNaN(b)) return false
+	return ((r & 0xff) << 16) | ((g & 0xff) << 8) | (b & 0xff)
+}
+
+class CompanionFeedbackState {}
+
+class CompanionFeedback {
+	/** @type {string} */
+	id = '' // the unique id used by companion to identify this feedback
+
+	/** @type {'boolean'|'advanced'} */
+	type = 'boolean'
+
+	/** @type {string} */
+	name = 'Unnamed' // displayed to the user
+
+	/** @type {{bgcolor: number|string, color: number|string}} */
+	defaultStyle = {} // used whenever the feedback doesn't specify a style
+
+	/** @type {Array<{type: string, label: string, id: string, default: any}>} */
+	options = [] // options that can be set by the user to identify when this feedback should be used
+
+	/** @type {(feedback: any, context: any|undefined) => (boolean|object)|null} */
+	callback // will be called by companion to get the feedback state
+
+	constructor({ type = 'boolean', name = 'Unnamed', defaultStyle = {}, options = {}, callback = null }) {
+		this.type = type || 'boolean'
+		this.name = name || 'My first feedback'
+		this.defaultStyle = defaultStyle || {
+			bgcolor: rgb(255, 0, 0),
+			color: rgb(0, 0, 0),
+		}
+		this.options = options || [
+			{
+				type: 'number',
+				label: 'Source',
+				id: 'source',
+				default: 1,
+			},
+		]
+		this.callback = callback
+	}
+
+	static fromCaptivateState(state) {
+		return new CompanionFeedback({
+			type: state.type,
+			name: state.name,
+			defaultStyle: state.defaultStyle,
+			options: state.options,
+			callback: state.callback,
+		})
+	}
+}
 
 runEntrypoint(CaptivateInstance, UpgradeScripts)
