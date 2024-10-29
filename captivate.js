@@ -407,6 +407,7 @@ class CaptivateInstance extends InstanceBase {
 			const feedbackKey = `${actorId}~${feedbackId}`
 			const optionsString = JSON.stringify(options)
 			const debounceKey = feedbackKey + optionsString
+			if (feedbackId.match(/matcher/)) console.log(`****Feedback changed`, feedbackKey, options, state)
 			// const now = Date.now()
 			// const last_time = last_feedback_times[debounceKey] ?? 0
 			// const debounceTime = 1000
