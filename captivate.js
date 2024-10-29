@@ -63,10 +63,9 @@ function makeCacheKeyUsingOptions(key, options) {
 	let cacheKey = key
 
 	if (options && Object.keys(options).length) {
-		// delete any params that shouldn't affect the results
-		// const optionsHash = crypto.createHash('md5').update(JSON.stringify(options)).digest('hex')
-		// cacheKey = `${cacheKey}+${optionsHash}`
-		cacheKey = `${cacheKey}+${JSON.stringify(options)}`
+		const optionsHash = crypto.createHash('md5').update(JSON.stringify(options)).digest('hex')
+		cacheKey = `${cacheKey}+${optionsHash}`
+		// cacheKey = `${cacheKey}+${JSON.stringify(options)}`
 	}
 	// debug('=== making cache key =================')
 	// debug('making cache key for:', key, options)
@@ -402,23 +401,8 @@ class CaptivateInstance extends InstanceBase {
 		})
 
 		// When Captivate changes a feedback item.
-		const last_feedback_times = {}
 		this.sp._cmp_v1_handleFeedbackChangeEvent.connect(async (actorId, feedbackId, options, state) => {
 			const feedbackKey = `${actorId}~${feedbackId}`
-			const optionsString = JSON.stringify(options)
-			const debounceKey = feedbackKey + optionsString
-			if (feedbackId.match(/matcher/)) console.log(`****Feedback changed`, feedbackKey, options, state)
-			// const now = Date.now()
-			// const last_time = last_feedback_times[debounceKey] ?? 0
-			// const debounceTime = 1000
-			// if (now - last_time < debounceTime) {
-			// 	this.debug(`handleFeedbackChangeEvent came too quickly... ignoring this event:\n${debounceKey}`)
-			// 	return
-			// }
-			// last_feedback_times[debounceKey] = now
-
-			this.pendingFeedbackChanges.set(feedbackKey, true)
-
 			// this.debug(`handle feedback change: '${feedbackKey}'`, options)
 			// this.debug({state})
 
@@ -429,6 +413,8 @@ class CaptivateInstance extends InstanceBase {
 
 			// put this state into the cache
 			this.cacheStore(actorId, feedbackId, options, state)
+
+			this.pendingFeedbackChanges.set(feedbackKey, true)
 
 			// this.debug(this._getAllFeedbacks());
 
@@ -599,16 +585,6 @@ class CaptivateInstance extends InstanceBase {
 											state.png64 = result
 											resolve(state)
 										})
-									// .getBuffer(Jimp.MIME_PNG, (err, buffer) => {
-									// 	if (err) {
-									// 		reject(err)
-									// 	} else {
-									// 		// Convert buffer to base64
-									// 		let base64data = buffer.toString('base64')
-									// 		state.png64 = base64data
-									// 		resolve(state)
-									// 	}
-									// })
 								})
 								.catch((e) => {
 									this.error('Error loading overlay image:', e)
@@ -624,7 +600,7 @@ class CaptivateInstance extends InstanceBase {
 				// fall back
 				state.png64 = this.layerImageData
 			}
-		} else if (state.hasOwnProperty('imageName')) {
+		} else if (state.hasOwnProperty('imageName') && state.imageName) {
 			state.png64 = this.images[`${state.imageName}`]
 			delete state.imageName
 		}
@@ -672,6 +648,8 @@ class CaptivateInstance extends InstanceBase {
 			/* advanced only */
 			'imageBuffer',
 			'imagePosition',
+			/* boolean feedbacks only use `value` */
+			'value',
 		]) {
 			if (state.hasOwnProperty(property)) {
 				result[property] = state[property]
@@ -711,6 +689,7 @@ class CaptivateInstance extends InstanceBase {
 	 * @throws {string}
 	 */
 	async _queryFeedbackState(actorId, feedbackId, options) {
+		// console.log('Asking Captivate for feedback state:', actorId, feedbackId, options)
 		const reply = await this.sp._cmp_v1_queryFeedbackState(actorId, feedbackId, options)
 		try {
 			var state = JSON.parse(reply)
