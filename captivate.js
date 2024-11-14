@@ -90,6 +90,8 @@ class CaptivateInstance extends InstanceBase {
 			...Presets,
 		})
 
+		this.selfId = (Math.random() * 1_000_000).toString(36)
+
 		this.USE_QWEBCHANNEL = USE_QWEBCHANNEL
 		this.timeOfLastDefinitionUpdates = new Date()
 		this.colorIdx = 0
@@ -101,6 +103,9 @@ class CaptivateInstance extends InstanceBase {
 		 * It also contains cached image data
 		 */
 		this.cache = new LocalCache()
+
+		/** @type {Map<string, Promise>} debounce Captivate requests with promises */
+		this.promises = new Map()
 
 		this.titlesPlayStatus = []
 		this.titlesImage = []
@@ -356,6 +361,18 @@ class CaptivateInstance extends InstanceBase {
 	 * Some Captivate events get pushed to us through _cmp_v1 signals.
 	 */
 	connectCallbacks() {
+		// used to force a reload of this controller
+		this.sp.messageIn.connect((from, to, data) => {
+			if (from != this.selfId && to == 'companion-module') {
+				data = JSON.parse(data)
+				this.debug('Message from', from, 'to', to, 'data', data)
+				if (data.reload) {
+					this.debug('Reloading Companion')
+					this.refreshIntegrations()
+				}
+			}
+		})
+
 		// used to debounce this event
 		let registry_change_debounce = 0
 
@@ -365,6 +382,7 @@ class CaptivateInstance extends InstanceBase {
 			if (registry_change_debounce) return
 
 			console.log(`****Registry updated`, elementId)
+			// this.checkForDefinitionUpdates()
 			this.refreshIntegrations()
 			registry_change_debounce = setTimeout(() => {
 				registry_change_debounce = 0
@@ -374,16 +392,28 @@ class CaptivateInstance extends InstanceBase {
 		// This signal is triggered when something triggers a feedback event in Captivate
 		// If the triggering event sends an empty state object, treat it as a signal to
 		// re-poll the new data. To do that, we just need to empty the old data from the cache.
+		const feedbackDebounce = new Map()
 		this.sp._cmp_v1_handleFeedbackChangeEvent.connect(async (actorId, feedbackId, options, state) => {
 			const fullId = `${actorId}~${feedbackId}`
+			if (feedbackDebounce.has(fullId)) return
+
+			feedbackDebounce.set(fullId, true)
+			setTimeout(() => {
+				feedbackDebounce.delete(fullId)
+			}, 100)
+
+			console.log('Feedback change event:', fullId, options, state)
 
 			// did we get a new state object with data? if so, process it and cache it
 			if (Object.keys(state).length > 0) {
 				state = await this._handleFeedbackState(state)
-				this.cache.storeFromFullId(fullId, options, state)
+				this.cache.storeFromFullId(fullId, options, state, 500)
 			} else {
-				// we didn't get any state data, so we need to remove the cache
-				this.cache.remove(actorId, feedbackId, options)
+				// we didn't get any state data, so we need to request it again
+				console.log('Feedback change event had no state, clearing cache:', fullId)
+				// state = await this.getFeedbackState(fullId, options)
+				// console.log(fullId, state)
+				this.cache.removeFromFullId(fullId, options)
 			}
 
 			// this tells Companion to poll all the feedbacks again
@@ -459,7 +489,7 @@ class CaptivateInstance extends InstanceBase {
 			if (kind == 'actions') return reply.companion_actions
 			else if (kind == 'presets') return reply.companion_presets
 			else if (kind == 'feedbacks') return reply.companion_feedbacks
-			else if (kind == 'lastUpdateTimestamp') return reply.lastUpdateTimestamp
+			else if (kind == 'lastUpdateTimestamp') return reply.companion_lastUpdateTime
 			else {
 				throw 'Type not supported'
 			}
@@ -560,7 +590,9 @@ class CaptivateInstance extends InstanceBase {
 										})
 										// Convert to buffer
 										.getBase64(Jimp.MIME_PNG, (result) => {
-											state.png64 = result
+											if (result) {
+												state.png64 = result
+											}
 											resolve(state)
 										})
 								})
@@ -669,19 +701,29 @@ class CaptivateInstance extends InstanceBase {
 	 * @throws {string}
 	 */
 	async _queryFeedbackState(actorId, feedbackId, options) {
-		// console.log('Asking Captivate for feedback state:', actorId, feedbackId, options)
-		const reply = await this.sp._cmp_v1_queryFeedbackState(actorId, feedbackId, options)
-		try {
-			var state = JSON.parse(reply)
-			// this.debug('_cmp_v1_queryFeedbackState response', { actorId, feedbackId, options, state })
-			state = await this._handleFeedbackState(state)
-			// this.debug('state after handling for Companion', { state })
-			this.cache.store(actorId, feedbackId, options, state)
-			return state
-		} catch (e) {
-			this.debug(`Error parsing response for ${feedbackId}`)
-			throw 'Bogus response'
+		const fullId = `${actorId}~${feedbackId}`
+		if (this.promises.has(fullId)) {
+			return this.promises.get(fullId)
 		}
+		const promise = new Promise(async (resolve, reject) => {
+			// console.log('Asking Captivate for feedback state:', actorId, feedbackId, options)
+			const reply = await this.sp._cmp_v1_queryFeedbackState(actorId, feedbackId, options)
+			try {
+				var state = JSON.parse(reply)
+				// this.debug('_cmp_v1_queryFeedbackState response', { actorId, feedbackId, options, state })
+				state = await this._handleFeedbackState(state)
+				// this.debug('state after handling for Companion', { state })
+				this.cache.store(actorId, feedbackId, options, state)
+				resolve(state)
+			} catch (e) {
+				this.error(`Error parsing response for ${feedbackId}`)
+				reject('Bogus response')
+			}
+		}).finally(() => {
+			this.promises.delete(fullId)
+		})
+		this.promises.set(fullId, promise)
+		return promise
 	}
 
 	/**
@@ -696,11 +738,12 @@ class CaptivateInstance extends InstanceBase {
 		// first, check the cache
 		const [cachekey, cachedState] = this.cache.getFromFullId(fullId, options)
 		if (cachedState) {
+			this.debug('Using cached feedback state:', fullId, options, cachedState)
 			return cachedState
 		}
 		// if we are here, we need to ask Captivate for the feedback state
 		const [actorId, feedbackId] = fullId.split('~', 2)
-		return this._queryFeedbackState(actorId, feedbackId, options)
+		return this._queryFeedbackState(actorId, feedbackId, options) ?? {}
 	}
 
 	/**
@@ -711,9 +754,9 @@ class CaptivateInstance extends InstanceBase {
 	 */
 	async checkForDefinitionUpdates() {
 		if (this.USE_QWEBCHANNEL) {
-			let response = await this.requestCompanionDefinition('lastUpdateTimestamp')
+			let response = await this.requestCompanionDefinition('lastUpdateTime')
 			// this.debug(response)
-			var lastUpdate = new Date(response.lastUpdate)
+			var lastUpdate = new Date(response)
 			if (lastUpdate >= this.timeOfLastDefinitionUpdates) {
 				this.timeOfLastDefinitionUpdates = lastUpdate
 				this.refreshIntegrations(this)
