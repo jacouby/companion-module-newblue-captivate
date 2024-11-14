@@ -703,15 +703,17 @@ class CaptivateInstance extends InstanceBase {
 	async _queryFeedbackState(actorId, feedbackId, options) {
 		const fullId = `${actorId}~${feedbackId}`
 		if (this.promises.has(fullId)) {
+			// it's okay for multiple callers to 'await' the same promise, they will
+			// all resolve in the order they were created.
 			return this.promises.get(fullId)
 		}
 		const promise = new Promise(async (resolve, reject) => {
 			// console.log('Asking Captivate for feedback state:', actorId, feedbackId, options)
-			const reply = await this.sp._cmp_v1_queryFeedbackState(actorId, feedbackId, options)
 			try {
+				const reply = await this.sp._cmp_v1_queryFeedbackState(actorId, feedbackId, options)
 				var state = JSON.parse(reply)
 				// this.debug('_cmp_v1_queryFeedbackState response', { actorId, feedbackId, options, state })
-				state = await this._handleFeedbackState(state)
+				state = await this._handleFeedbackState(state) // will convert image names to images
 				// this.debug('state after handling for Companion', { state })
 				this.cache.store(actorId, feedbackId, options, state)
 				resolve(state)
