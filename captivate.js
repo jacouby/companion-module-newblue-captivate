@@ -395,14 +395,15 @@ class CaptivateInstance extends InstanceBase {
 		const feedbackDebounce = new Map()
 		this.sp._cmp_v1_handleFeedbackChangeEvent.connect(async (actorId, feedbackId, options, state) => {
 			const fullId = `${actorId}~${feedbackId}`
-			if (feedbackDebounce.has(fullId)) return
 
+			// if we are already processing this feedback, ignore it
+			if (feedbackDebounce.has(fullId)) return
 			feedbackDebounce.set(fullId, true)
 			setTimeout(() => {
 				feedbackDebounce.delete(fullId)
 			}, 100)
 
-			console.log('Feedback change event:', fullId, options, state)
+			// console.log('Feedback change event:', fullId, options, state)
 
 			// did we get a new state object with data? if so, process it and cache it
 			if (Object.keys(state).length > 0) {
@@ -410,7 +411,7 @@ class CaptivateInstance extends InstanceBase {
 				this.cache.storeFromFullId(fullId, options, state, 500)
 			} else {
 				// we didn't get any state data, so we need to request it again
-				console.log('Feedback change event had no state, clearing cache:', fullId)
+				// console.log('Feedback change event had no state, clearing cache:', fullId)
 				// state = await this.getFeedbackState(fullId, options)
 				// console.log(fullId, state)
 				this.cache.removeFromFullId(fullId, options)
@@ -418,12 +419,30 @@ class CaptivateInstance extends InstanceBase {
 
 			// this tells Companion to poll all the feedbacks again
 			// pragmatically, this will then lead to handleFeedbackRequest being called
-			this.checkFeedbacks()
+			// this.debug('Scheduling feedback check for ' + fullId)
+			this.checkFeedbacks(fullId)
+
+			// because we debounced this function, we might have gotten out of sync with
+			// Captivate. as a result, let's schedule an extra feedback check
+			// since the check uses the cache when possible, each call should be fast
+			// this.scheduleFunction(fullId, () => this.checkFeedbacks(fullId), 100);
+			this.scheduleFunction('all-feedbacks', () => this.checkFeedbacks(), 100)
 		})
 
 		// When Captivate issues a data event
 		this.sp.onNotify.connect(this.handleNotification.bind(this))
 		this.sp.scheduleCommand('subscribe', { events: 'play,data' }, {})
+	}
+
+	scheduleFunction(key, fn, delay = 1000) {
+		this.scheduleRunner ??= new Map()
+		if (this.scheduleRunner.has(key)) {
+			clearTimeout(this.scheduleRunner.get(key))
+		}
+		const timer = setTimeout(() => {
+			fn()
+		}, delay)
+		this.scheduleRunner.set(key, timer)
 	}
 
 	/**
@@ -740,7 +759,7 @@ class CaptivateInstance extends InstanceBase {
 		// first, check the cache
 		const [cachekey, cachedState] = this.cache.getFromFullId(fullId, options)
 		if (cachedState) {
-			this.debug('Using cached feedback state:', fullId, options, cachedState)
+			// this.debug('Using cached feedback state:', fullId, options, cachedState)
 			return cachedState
 		}
 		// if we are here, we need to ask Captivate for the feedback state
@@ -765,43 +784,6 @@ class CaptivateInstance extends InstanceBase {
 			}
 		}
 	}
-
-	// cacheRemoveKeysWithPrefix(prefix) {
-	// 	for (const key in this.localFeedbackCache) {
-	// 		if (key.startsWith(prefix)) delete this.localFeedbackCache[key]
-	// 	}
-	// }
-
-	// cacheStoreFromFullId(actorFeedbackId, options, state) {
-	// 	const cachekey = makeCacheKeyUsingOptions(actorFeedbackId, options)
-	// 	this.localFeedbackCache[cachekey] = state
-	// 	return cachekey
-	// }
-
-	// cacheStore(actorId, feedbackId, options, state) {
-	// 	const afid = [actorId, feedbackId].join('~')
-	// 	return this.cacheStoreFromFullId(afid, options, state)
-	// }
-
-	// cacheGetFromFullId(actorFeedbackId, options) {
-	// 	const cachekey = makeCacheKeyUsingOptions(actorFeedbackId, options)
-	// 	return [cachekey, this.localFeedbackCache[cachekey]]
-	// }
-
-	// cacheGet(actorId, feedbackId, options) {
-	// 	const afid = [actorId, feedbackId].join('~')
-	// 	return this.cacheGetFromFullId(afid, options)
-	// }
-
-	// cacheRemove(actorId, feedbackId, options) {
-	// 	const afid = [actorId, feedbackId].join('~')
-	// 	const cachekey = makeCacheKeyUsingOptions(afid, options)
-	// 	delete this.localFeedbackCache[cachekey]
-	// }
-
-	// async getCachedImageData(namePathOrUrl, { label = 'hello' } = {}) {
-	//   return this.cache.getImageData(namePathOrUrl, { label })
-	// }
 
 	/**
 	 * This will be used as the callback for a companion feedback.
