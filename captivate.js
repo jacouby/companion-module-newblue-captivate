@@ -123,12 +123,6 @@ class CaptivateInstance extends InstanceBase {
 		 */
 		this.localFeedbackCache = {}
 
-		/**
-		 * The pendingFeedbackChanges object is used to track feedbacks that have changed but haven't been sent to Companion yet.
-		 */
-		this.pendingFeedbackChanges = new Map()
-		this.cacheMisses = new Map()
-
 		/** @type {Map<string, object[]>} - key is the feedbackId, the value is a list of instance ids */
 		this.feedbackInstances = new Map()
 
@@ -402,25 +396,17 @@ class CaptivateInstance extends InstanceBase {
 
 		// When Captivate changes a feedback item.
 		this.sp._cmp_v1_handleFeedbackChangeEvent.connect(async (actorId, feedbackId, options, state) => {
-			const feedbackKey = `${actorId}~${feedbackId}`
-			// this.debug(`handle feedback change: '${feedbackKey}'`, options)
-			// this.debug({state})
+			const fullId = `${actorId}~${feedbackId}`
+			const cacheKey = makeCacheKeyUsingOptions(fullId, options)
 
-			// transform the state into a format that Companion can use
+			// did we get a new state object with data? if so, process it and cache it
 			if (Object.keys(state).length > 0) {
 				state = await this._handleFeedbackState(state)
+				this.cacheStoreFromFullId(fullId, options, state)
+			} else {
+				// we didn't get a state object, so we need to remove the cache
+				this.cacheRemove(actorId, feedbackId, options)
 			}
-
-			// put this state into the cache
-			this.cacheStore(actorId, feedbackId, options, state)
-
-			this.pendingFeedbackChanges.set(feedbackKey, true)
-
-			// this.debug(this._getAllFeedbacks());
-
-			// checkFeedbacksById expects to be called with the actual, internal ids
-			// of each feedback instance, not the `feedbackId` that we created for the
-			// feedback type, that's why we update feedbacks this way.
 			this.checkFeedbacks()
 		})
 
@@ -554,7 +540,7 @@ class CaptivateInstance extends InstanceBase {
 	async _handleFeedbackOverlayImage(state) {
 		// If the feedback specified an image name, attempt to load it from our local image cache.
 		if (state.hasOwnProperty('overlayImageName')) {
-			let layerImageData = this.images[`${state.overlayImageName}`]
+			let layerImageData = await this.getCachedImageData(`${state.overlayImageName}`)
 			delete state.overlayImageName
 
 			if (!layerImageData) {
@@ -601,7 +587,7 @@ class CaptivateInstance extends InstanceBase {
 				state.png64 = this.layerImageData
 			}
 		} else if (state.hasOwnProperty('imageName') && state.imageName) {
-			state.png64 = this.images[`${state.imageName}`]
+			state.png64 = await this.getCachedImageData(`${state.imageName}`)
 			delete state.imageName
 		}
 		return state
@@ -664,9 +650,9 @@ class CaptivateInstance extends InstanceBase {
 		// we can pass other image data to Companion using imageNames, imagePath, or imageUrl (png64 will take precedence)
 		let imageKey = state.imageName || state.imageUrl || state.imagePath
 		if (imageKey) {
-			this.debug('requesting image data from cache', imageKey)
+			// this.debug('requesting image data from cache', imageKey)
 			const imageData = await this.getCachedImageData(imageKey)
-			this.debug('image data', imageData)
+			// this.debug('image data', imageData)
 			if (imageData != undefined) {
 				result.png64 ??= imageData
 			}
@@ -674,6 +660,11 @@ class CaptivateInstance extends InstanceBase {
 
 		return result
 	}
+
+	// async _getFeedbackState(feedbackId, options) {
+	//   const [actorId, feedbackId] = feedbackId.split('~', 2)
+	//   return this.queryFeedbackDetails(actorId, feedbackId, options)
+	// }
 
 	/**
 	 * This asks Captivate what the current value of this feedback should be.
@@ -693,8 +684,16 @@ class CaptivateInstance extends InstanceBase {
 		const reply = await this.sp._cmp_v1_queryFeedbackState(actorId, feedbackId, options)
 		try {
 			var state = JSON.parse(reply)
-			this.debug({ actorId, feedbackId, options, result: state })
-			return await this._handleFeedbackState(state)
+			// this.debug('_cmp_v1_queryFeedbackState response', { actorId, feedbackId, options, state })
+			state = await this._handleFeedbackState(state)
+			// this.debug('state after handling for Companion', { state })
+
+			this.cacheStore(actorId, feedbackId, options, state)
+			return state
+			// if (Object.keys(state).length > 0) {
+			// } else {
+			// 	this.debug(`No feedback state received for ${feedbackId}... ignoring`)
+			// }
 		} catch (e) {
 			this.debug(`Error parsing response for ${feedbackId}`)
 			throw 'Bogus response'
@@ -702,23 +701,22 @@ class CaptivateInstance extends InstanceBase {
 	}
 
 	/**
-	 * This is the higher level call to get feedback data from Captivate.
+	 * This will return a cached feedback state if it exists, otherwise it will ask Captivate for the feedback state.
 	 *
-	 * @param {string} actorId the actor id will be connected to the feedbackId by a '~'
-	 * @param {string} feedbackId
+	 * @param {string} fullId the actor id and feedback id will be connected by a '~'
 	 * @param {object} options The options as they are set in the feedback object
 	 * @returns {Promise<{[key: string]: string|number|boolean}>}
 	 * @throws {string}
 	 */
-	async queryFeedbackDetails(actorId, feedbackId, options) {
-		let state
-		try {
-			state = await this._queryFeedbackState(actorId, feedbackId, options)
-		} catch (e) {
-			this.debug('An error occurred', e)
-			throw e
+	async getFeedbackState(fullId, options) {
+		// first, check the cache
+		const [cachekey, cachedState] = this.cacheGetFromFullId(fullId, options)
+		if (cachedState) {
+			return cachedState
 		}
-		return state
+		// if we are here, we need to ask Captivate for the feedback state
+		const [actorId, feedbackId] = fullId.split('~', 2)
+		return this._queryFeedbackState(actorId, feedbackId, options)
 	}
 
 	/**
@@ -730,7 +728,7 @@ class CaptivateInstance extends InstanceBase {
 	async checkForDefinitionUpdates() {
 		if (this.USE_QWEBCHANNEL) {
 			let response = await this.requestCompanionDefinition('lastUpdateTimestamp')
-			this.debug(response)
+			// this.debug(response)
 			var lastUpdate = new Date(response.lastUpdate)
 			if (lastUpdate >= this.timeOfLastDefinitionUpdates) {
 				this.timeOfLastDefinitionUpdates = lastUpdate
@@ -748,11 +746,12 @@ class CaptivateInstance extends InstanceBase {
 	cacheStoreFromFullId(actorFeedbackId, options, state) {
 		const cachekey = makeCacheKeyUsingOptions(actorFeedbackId, options)
 		this.localFeedbackCache[cachekey] = state
+		return cachekey
 	}
 
 	cacheStore(actorId, feedbackId, options, state) {
 		const afid = [actorId, feedbackId].join('~')
-		this.cacheStoreFromFullId(afid, options, state)
+		return this.cacheStoreFromFullId(afid, options, state)
 	}
 
 	cacheGetFromFullId(actorFeedbackId, options) {
@@ -765,80 +764,72 @@ class CaptivateInstance extends InstanceBase {
 		return this.cacheGetFromFullId(afid, options)
 	}
 
-	/**
-	 *
-	 * @param {string} actorFeedbackId the actor feedback id is a full actorId with feedbackId separated by ~
-	 * @param {object} options any arbitrary set of data
-	 */
-	primeFeedbackState(actorFeedbackId, options) {
-		const [cacheKey, result] = this.cacheGetFromFullId(actorFeedbackId, options)
-
-		if (result == undefined) {
-			this.debug('not in the cache')
-			this.cacheMisses.set(cacheKey, { id: actorFeedbackId, options })
-		}
+	cacheRemove(actorId, feedbackId, options) {
+		const afid = [actorId, feedbackId].join('~')
+		const cachekey = makeCacheKeyUsingOptions(afid, options)
+		delete this.localFeedbackCache[cachekey]
 	}
 
-	/**
-	 * Will ask Captivate for the current state of each registered feedback
-	 * that isn't already in the cache.
-	 *
-	 * This function doesn't send feedbacks to companion, it just updates the cache.
-	 */
-	async requestMissingFeedbacks() {
-		if (this.doingRebuild) return
-		this.doingRebuild = true
+	// /**
+	//  * Will ask Captivate for the current state of each registered feedback
+	//  * that isn't already in the cache.
+	//  *
+	//  * This function doesn't send feedbacks to companion, it just updates the cache.
+	//  */
+	// async requestMissingFeedbacks() {
+	// 	if (this.doingRebuild || this.cacheMisses.size == 0) return
+	// 	this.doingRebuild = true
 
-		let promises = []
+	// 	let promises = []
 
-		// clear out any previously pending feedback changes since we are loading a new version now
-		this.pendingFeedbackChanges.clear()
-		while (this.cacheMisses.size > 0) {
-			for (let cacheKey of this.cacheMisses.keys()) {
-				const miss = this.cacheMisses.get(cacheKey) ?? {}
-				this.cacheMisses.delete(cacheKey)
-				if (!miss.id) continue
+	// 	// clear out any previously pending feedback changes since we are loading a new version now
+	// 	this.pendingFeedbackChanges.clear()
+	// 	while (this.cacheMisses.size > 0) {
+	// 		for (let cacheKey of this.cacheMisses.keys()) {
+	// 			const miss = this.cacheMisses.get(cacheKey) ?? {}
+	// 			this.cacheMisses.delete(cacheKey)
+	// 			if (!miss.id) continue
 
-				console.log('rebuildFeedbackCache for: ' + miss.id)
+	// 			console.log('rebuildFeedbackCache for: ' + miss.id)
 
-				// parse the id of the missing item
-				const [actorId, feedbackId] = miss.id.split('~', 2)
+	// 			// parse the id of the missing item
+	// 			const [actorId, feedbackId] = miss.id.split('~', 2)
 
-				// do we have a valid feedback id?
-				if (actorId && feedbackId && feedbackId.match(/\.feedback\./)) {
-					let promise = new Promise((resolve, _) => {
-						// Ask Captivate for the latest details
-						this.queryFeedbackDetails(actorId, feedbackId, miss.options)
-							.then((reply) => {
-								this.debug('feedback state received', reply)
-								this.cacheStoreFromFullId(miss.id, miss.options, reply)
-								resolve(miss.id)
-							})
-							.catch((error) => {
-								this.debug(error)
-								resolve(null)
-							})
-					})
+	// 			// do we have a valid feedback id?
+	// 			if (actorId && feedbackId && feedbackId.match(/\.feedback\./)) {
+	// 				let promise = new Promise((resolve, _) => {
+	// 					// Ask Captivate for the latest details
+	// 					this.getFeedbackState(actorId, feedbackId, miss.options)
+	// 						.then((state) => {
+	// 							this.debug('feedback state received from Captivate', { id: miss.id, options: miss.options, state })
+	// 							this.cacheStoreFromFullId(miss.id, miss.options, state)
+	// 							resolve(miss.id)
+	// 						})
+	// 						.catch((error) => {
+	// 							this.debug(error)
+	// 							resolve(null)
+	// 						})
+	// 				})
 
-					promises.push(promise)
-				}
-			}
-		}
+	// 				promises.push(promise)
+	// 			}
+	// 		}
+	// 	}
 
-		if (promises.length > 0) {
-			await Promise.all(promises).then((successfulIds) => {
-				// console.log('Feedback cache has been rebuilt... running checkFeedbacks again!')
-				// this.checkFeedbacks()
-				successfulIds = successfulIds.filter((e) => e != null)
-				this.checkFeedbacksById(successfulIds)
-			})
-		}
+	// 	if (promises.length > 0) {
+	// 		await Promise.all(promises).then((successfulIds) => {
+	// 			// console.log('Feedback cache has been rebuilt... running checkFeedbacks again!')
+	// 			// this.checkFeedbacks()
+	// 			successfulIds = successfulIds.filter((e) => e != null)
+	// 			this.checkFeedbacksById(successfulIds)
+	// 		})
+	// 	}
 
-		this.doingRebuild = false
-	}
+	// 	this.doingRebuild = false
+	// }
 
 	async getCachedImageData(namePathOrUrl, { label = 'hello' } = {}) {
-		console.log('getCachedImageData', namePathOrUrl)
+		// console.log('getCachedImageData', namePathOrUrl)
 		if (this.images[namePathOrUrl]) {
 			return this.images[namePathOrUrl]
 		}
@@ -875,94 +866,14 @@ class CaptivateInstance extends InstanceBase {
 	 * @returns
 	 */
 	async handleFeedbackRequest(event) {
-		// if (!this.pendingFeedbackChanges.get(event.feedbackId)) return {}
-		// delete this.pendingFeedbackChanges[event.feedbackId]
-
 		// debug('~~~~~~~~~~ Feedback Callback ~~~~~~~~~~~~')
 		// debug(event)
 		// debug('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
 
 		// the feedbackId will be the full actor/feedback id (actorId~feedbackId)
-		// let cacheKey = makeCacheKeyUsingOptions(event.feedbackId, event.options)
+		let state = await this.getFeedbackState(event.feedbackId, event.options)
 
-		// lookup content in our local cache
-		let [cacheKey, result] = this.cacheGetFromFullId(event.feedbackId, event.options)
-
-		// if (result == undefined || this.pendingFeedbackChanges[event.feedbackId]) {
-		// 	// this was a cache miss...
-		// 	// not in our cache, possibly because we've just started up
-		// 	// Ask Captivate to push it back to us, which will trigger a refresh
-		// 	this.cacheMisses.set(event.feedbackId, { id: event.feedbackId, options: event.options })
-		// 	this.debug(
-		// 		`not in cache or cache out of date, scheduling for later lookup: ${event.feedbackId} - ${JSON.stringify(
-		// 			event.options
-		// 		)}`
-		// 	)
-		// 	return event.type == 'boolean' ? false : {}
-		// } else {
-		// 	debug(`found in the cache: ${event.feedbackId} - ${JSON.stringify(event.options)}`)
-		// }
-
-		/**
-		 * The following code was used to coerce the cache result into a format that Companion can use. However,
-		 * This caused images to be processed too often. This has been refactored so that processing is done
-		 * before the data gets stored in our local cache.
-		 */
-		if (result != undefined) {
-			let imageKey = result.imageName || result.imageUrl || result.imagePath
-			if (imageKey) {
-				var processedResult = {}
-				Object.assign(processedResult, { ...result })
-				delete processedResult.imageName
-				let imageData = await this.getCachedImageData(imageKey)
-				// this.debug('image data', imageData)
-				if (imageData != undefined) {
-					processedResult['png64'] = imageData
-				}
-				// this.debug('returning processed result', processedResult)
-				result = processedResult
-			}
-
-			// if (this.pendingFeedbackChanges[event.feedbackId]) {
-			// 	this.cacheMisses.set(event.feedbackId, { id: event.feedbackId, options: event.options })
-			// 	debug(`updating cache: ${event.feedbackId} - ${JSON.stringify(event.options)}`)
-			// } else {
-			// 	// debug(`found in the cache: ${event.feedbackId} - ${JSON.stringify(event.options)}`)
-			// }
-		} else {
-			// not in our cache, possibly because we've just started up
-			// Ask Captivate to push it back to us, which will trigger a refresh
-			this.cacheMisses.set(cacheKey, { id: event.feedbackId, options: event.options })
-			debug(`not in the cache: ${event.feedbackId} - ${JSON.stringify(event.options)}`)
-		}
-
-		this.startCacheChecker() // does nothing unless there are cache misses
-
-		if (result != undefined) {
-			// debug('feedback state: ')
-			// debug(result)
-		}
-		return event.type == 'boolean' ? !!result?.value : result
-	}
-
-	stopCacheChecker() {
-		if (this.cacheBuilder != undefined) {
-			clearTimeout(this.cacheBuilder)
-			delete this.cacheBuilder
-			this.cacheBuilder = undefined
-		}
-	}
-
-	startCacheChecker() {
-		this.stopCacheChecker()
-
-		if (this.cacheMisses.size > 0) {
-			// let's periodically try to make a connection again
-			this.cacheBuilder = setTimeout(() => {
-				this.requestMissingFeedbacks()
-				this.startCacheChecker()
-			}, 500)
-		}
+		return event.type == 'boolean' ? !!state?.value : state
 	}
 
 	/**
