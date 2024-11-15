@@ -49,6 +49,7 @@ const QWebChannelEx = require('./contrib/qwebchannel').QWebChannel
 const WebSocket = require('ws')
 const Jimp = require('jimp')
 
+const CACHE_LIFETIME = 250
 const USE_QWEBCHANNEL = true
 
 let debug = () => {}
@@ -157,6 +158,9 @@ class CaptivateInstance extends InstanceBase {
 		this.setupFeedbacks() // from feedbacks.js
 		this.setupActions() // from actions.js
 		this.initPresets() // from presets.js
+
+		// schedule another refresh in 5 minutes
+		this.scheduleFunction('refresh', () => this.refreshIntegrations(), 300_000)
 	}
 
 	/**
@@ -173,11 +177,11 @@ class CaptivateInstance extends InstanceBase {
 		if (this.config.bonjour_host) {
 			serverUrl = `ws://${this.config.bonjour_host}` // will contain port
 		} else {
-			let port = this.config.port // config defaults to 9023
-			let host = this.config.host // config defaults to '127.0.0.1'
-			if (host && port) {
-				serverUrl = `ws://${host}:${port}`
-			}
+			let port = this.config.port || 9023 // config defaults to 9023
+			let host = this.config.host || '127.0.0.1' // config defaults to '127.0.0.1'
+			this.config.port = port
+			this.config.host = host
+			serverUrl = `ws://${host}:${port}`
 		}
 		this.log('debug', `connecting to ${serverUrl}`)
 		if (!serverUrl) return
@@ -234,8 +238,8 @@ class CaptivateInstance extends InstanceBase {
 			this.log('warning', `NewBlue: Captivate: Connection error ${data}.`)
 			this.status && this.status(this.STATUS_WARNING, 'Disconnected')
 			this.config.needsNewConfig = true
-			this.config.port = ''
-			this.config.host = ''
+			// this.config.port = ''
+			// this.config.host = ''
 		})
 
 		socket.on('close', () => {
@@ -408,7 +412,7 @@ class CaptivateInstance extends InstanceBase {
 			// did we get a new state object with data? if so, process it and cache it
 			if (Object.keys(state).length > 0) {
 				state = await this._handleFeedbackState(state)
-				this.cache.storeFromFullId(fullId, options, state, 500)
+				this.cache.storeFromFullId(fullId, options, state, CACHE_LIFETIME)
 			} else {
 				// we didn't get any state data, so we need to request it again
 				// console.log('Feedback change event had no state, clearing cache:', fullId)
@@ -426,7 +430,7 @@ class CaptivateInstance extends InstanceBase {
 			// Captivate. as a result, let's schedule an extra feedback check
 			// since the check uses the cache when possible, each call should be fast
 			// this.scheduleFunction(fullId, () => this.checkFeedbacks(fullId), 100);
-			this.scheduleFunction('all-feedbacks', () => this.checkFeedbacks(), 100)
+			this.scheduleFunction('all-feedbacks', () => this.checkFeedbacks(), 500)
 		})
 
 		// When Captivate issues a data event
@@ -518,6 +522,28 @@ class CaptivateInstance extends InstanceBase {
 		}
 	}
 
+	/**
+	 * This function expects a state that looks like this:
+	 * 
+	 * {
+			"overlayImageName": "play_layer",
+			"overlayImageName_paused": "play_layer_red",
+			"overlayImageName_running": "play_layer_red",
+			"overlayQueryKey": "{91883451-a9f6-495f-9c3e-68a33ae051a3}",
+			"png64": "iVBORw0KGgoAAAANSUhEUgAAAEgAAABICAYAAABV7bNHAAAACXBIWXMAAAsTAAALEwEAmpwYAAAEhklEQVR4nO3XT0gcVxwH8O+b2aQaibth/4zu2nWjWFBBsWmlBN2qbcillDaXIB56CHrrKSDoIZSWirCHQumhubRQcrE9tEJPW6sxCNYmht6EXZsEcdf5s/8tu9XNzOvBnc1kskqThrTF3wdk5/3em/d+85s3sytACCGEEEIIIYQQQgghhBBCCCGEPD+KonBrOxKJXAfw47PONz8/v6yqKgfArHFVVfmlS5duP+18q6urf9hjqVSKi6LY8qw5MsZYKpUyDusXzINkMvlwcHDwSnd397xtjPisiwPA6Ojob06n82trbGRk5K517b+Lc87sMY/Hw3Rd3/4HKR6pmqQgCGIsFvtqcXHx3VoDVVXlmUyGp9NpXi6XOXCw40ZGRr6oHBsAvreft7S0JMdisQ/MdiKR2L9///4Vsy3L8sNCocALhQKv7LbqeuYfgJeAg7udy+V4KpXiuVyOA4/vIE3TeCqV4pqmcQABM6ZpGk+n01xRFN2cX9M0Lsuykc1mq7snGo3+qmkaz2az1VwclY7bfr//50qhACAM4Jb1Ql0uF06ePMnMpBhjpyVJYqqq8suXL9/SdR0A3q9VXM55NYm6uroTLS0t+5Y+sbGxkVmK7NrY2Ij7fL4ogIsAsLW1pQeDQbG9vb3e5XIxs4DWNWZmZj5vbW29WSwWhys3wgiFQifOnz9/Ox6P95tFMT+9Xu85AHcr12MAQF9f3+ter5cBQH19fWh2dvaBAAC9vb2v7ezsvKUoCjcMA8lk8qZ18QsXLryTzWahKApXFIXrug7O+UcAIEmSODc3N+f3+w99ZDo6Os709PT85HA4HG63+7F3WjQa/cHcKYwxBqDF7XZ7GGPXzDHBYFAEgM3NzaJt6uojNzEx8WGxWJw124FAQCiXy/rKyso5cxfZzr1rz5PzR0NKpdKD8fHxoMMMSJJUXcz+sl5eXo5ubGwUh4aGGgAgFAq1A/gdAGRZ1gcGBq5V7soT7wgA2N3dLSwsLLyt6/qfzc3NDgBdZt/Y2Nh7DofDuoPMZF8GsAYA+XyeO53OmnNb1tgF0Gpp80QioYVCoZVSqfQm8GgH1cIOVNuCIAiKopSFRCJRliTpW+vgGzdufHPnzp2S2d7f39/v7Ow8NT09/dnk5OTHa2trmwCQyWR4f3//L7FY7BPDMDiA0BEJwOl0PvHCz2QyAIB79+4VGGNMEATB5/MxVVW/CwQCgWw2y8Ph8PpRxQGAs2fPNmqadr2hoaEpn8/zq1evbg4PDw9sb2+HgYMim2O9Xi9TVdWQJKnZLBrnnO/t7ZXX19dVv9/foiiK3tXVdRGMMc8hF+SplLTaL4riK6IoDlnH2M+xtRkAtyV02HEYwGkcPDL2+Ku15meMeSufdXj8mzbMGHvDbAiCcKoyD6uMdVjH2ucVBOGMGSfkOYpEIl/WiieTyfKLzuW/RAAAWZaNtra2Dnun/bfGcSQAQFNTk8CtPwIqfD7fkV+tx8FT/z903NQsUDwez7/oRP5XpqamPv23cyCEEEIIIYQQQgghhBBCCCGEEEIIIQD+AjRuD8kAJAz9AAAAAElFTkSuQmCC",
+			"text": " "
+		 }
+	 * 
+	 * This function will take the overlayQueryKey and use it to determine the play state of the layer
+	 * Then, it will automatically select the proper overlayImageName to use based on the play state.
+	 * 
+	 * It might also receive a pngQueryKey which will be used to specifically set the png value.
+	 * 
+	 * The result of this function should then be passed through the _handleFeedbackOverlayImage function
+	 * 
+	 * @param {any} state 
+	 * @returns 
+	 */
 	async _handleFeedbackOverlayPlayStates(state) {
 		// query for our layer play states, we will use this to fold into our feedback state
 		const playStates = await this.sp.getValueForKey('newblue.automation.layerstate')
@@ -590,40 +616,42 @@ class CaptivateInstance extends InstanceBase {
 				const baseImage = Buffer.from(state.png64, 'base64')
 				const overlayImage = Buffer.from(layerImageData, 'base64')
 
-				await new Promise((resolve, reject) => {
+				await new Promise(async (resolve, reject) => {
 					// Load the base image
-					Jimp.read(baseImage)
-						.then((base) => {
-							// Load the overlay image
-							Jimp.read(overlayImage)
-								.then((overlay) => {
-									// Resize overlay to match base image, if necessary
-									overlay.resize(base.bitmap.width, Jimp.AUTO)
+					let base, overlay
 
-									// Composite the overlay onto the base image
-									base
-										.composite(overlay, 0, 0, {
-											mode: Jimp.BLEND_SOURCE_OVER,
-											opacitySource: 1.0,
-											opacityDest: 1.0,
-										})
-										// Convert to buffer
-										.getBase64(Jimp.MIME_PNG, (result) => {
-											if (result) {
-												state.png64 = result
-											}
-											resolve(state)
-										})
-								})
-								.catch((e) => {
-									this.error('Error loading overlay image:', e)
-									resolve(state)
-								})
-						})
-						.catch((e) => {
-							this.error('Error loading base image:', e)
-							resolve(state)
-						})
+					try {
+						base = await Jimp.read(baseImage)
+					} catch (e) {
+						this.error('Error loading base image', e)
+						resolve(state)
+						return
+					}
+
+					try {
+						overlay = await Jimp.read(overlayImage)
+					} catch (e) {
+						this.error('Error loading overlay image', e)
+						resolve(state)
+						return
+					}
+
+					// Resize overlay to match base image, if necessary
+					overlay.resize(base.bitmap.width, Jimp.AUTO)
+
+					// Composite the overlay onto the base image
+					base.composite(overlay, 0, 0, {
+						mode: Jimp.BLEND_SOURCE_OVER,
+						opacitySource: 1.0,
+						opacityDest: 1.0,
+					})
+
+					// Convert to buffer
+					const result = await base.getBase64Async(Jimp.MIME_PNG)
+					if (result) {
+						state.png64 = result
+					}
+					resolve(state)
 				})
 			} else {
 				// fall back
@@ -645,13 +673,18 @@ class CaptivateInstance extends InstanceBase {
 	 * @returns
 	 */
 	async _handleFeedbackState(state) {
-		// first, handle the items that are Captivate Specific
+		// first, handle the items that are sent to us by Captivate
 		if (state.overlayQueryKey || state.pngQueryKey) {
+			// debug('state with overlay query keys', state)
 			state = await this._handleFeedbackOverlayPlayStates(state)
-			debug('state with overlay information', state)
+			// debug('state with overlay information', state)
 		}
+
+		// now, handle the specified overlay image if there is one
 		if (state.overlayImageName || state.imageName) {
+			// debug('state with overlay image name keys', state)
 			state = await this._handleFeedbackOverlayImage(state)
+			// debug('state with overlay information', state)
 		}
 
 		return this._adaptToCompanionFeedback(state)
@@ -713,38 +746,25 @@ class CaptivateInstance extends InstanceBase {
 	 *
 	 * This function will also save the feedback state to our cache.
 	 *
-	 * @param {string} actorId the actor id will be connected to the feedbackId by a '~'
-	 * @param {string} feedbackId
+	 * @param {string} fullFeedbackId the actor id will be connected to the feedbackId by a '~'
 	 * @param {object} options The options as they are set in the feedback object
 	 * @returns {Promise<{[key: string]: string|number|boolean}>}
-	 * @throws {string}
 	 */
-	async _queryFeedbackState(actorId, feedbackId, options) {
-		const fullId = `${actorId}~${feedbackId}`
-		if (this.promises.has(fullId)) {
-			// it's okay for multiple callers to 'await' the same promise, they will
-			// all resolve in the order they were created.
-			return this.promises.get(fullId)
+	async _queryFeedbackState(fullId, options) {
+		const [actorId, feedbackId] = fullId.split('~', 2)
+		// console.log('Asking Captivate for feedback state:', actorId, feedbackId, options)
+		try {
+			const reply = await this.sp._cmp_v1_queryFeedbackState(actorId, feedbackId, options)
+			var state = JSON.parse(reply)
+			// this.debug('_cmp_v1_queryFeedbackState response', { actorId, feedbackId, options, state })
+			state = await this._handleFeedbackState(state) // will convert image names to images
+			// this.debug('state after handling for Companion', { state })
+			this.cache.store(actorId, feedbackId, options, state, CACHE_LIFETIME)
+			return state
+		} catch (e) {
+			this.error(`Error parsing response for ${feedbackId}`)
+			return {}
 		}
-		const promise = new Promise(async (resolve, reject) => {
-			// console.log('Asking Captivate for feedback state:', actorId, feedbackId, options)
-			try {
-				const reply = await this.sp._cmp_v1_queryFeedbackState(actorId, feedbackId, options)
-				var state = JSON.parse(reply)
-				// this.debug('_cmp_v1_queryFeedbackState response', { actorId, feedbackId, options, state })
-				state = await this._handleFeedbackState(state) // will convert image names to images
-				// this.debug('state after handling for Companion', { state })
-				this.cache.store(actorId, feedbackId, options, state)
-				resolve(state)
-			} catch (e) {
-				this.error(`Error parsing response for ${feedbackId}`)
-				reject('Bogus response')
-			}
-		}).finally(() => {
-			this.promises.delete(fullId)
-		})
-		this.promises.set(fullId, promise)
-		return promise
 	}
 
 	/**
@@ -756,15 +776,9 @@ class CaptivateInstance extends InstanceBase {
 	 * @throws {string}
 	 */
 	async getFeedbackState(fullId, options) {
-		// first, check the cache
-		const [cachekey, cachedState] = this.cache.getFromFullId(fullId, options)
-		if (cachedState) {
-			// this.debug('Using cached feedback state:', fullId, options, cachedState)
-			return cachedState
-		}
-		// if we are here, we need to ask Captivate for the feedback state
-		const [actorId, feedbackId] = fullId.split('~', 2)
-		return this._queryFeedbackState(actorId, feedbackId, options) ?? {}
+		return this.cache.getPromisedFromFullId(fullId, options, () => {
+			return this._queryFeedbackState(fullId, options)
+		})
 	}
 
 	/**
@@ -798,7 +812,6 @@ class CaptivateInstance extends InstanceBase {
 
 		// the feedbackId will be the full actor/feedback id (actorId~feedbackId)
 		let state = await this.getFeedbackState(event.feedbackId, event.options)
-
 		return event.type == 'boolean' ? !!state?.value : state
 	}
 
