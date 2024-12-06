@@ -11,9 +11,11 @@
 	"license": "MIT",
 	"dependencies": {
 		"@companion-module/base": "~1.7.0",
+		"bufferutil": "^4.0.8",
 		"jimp": "^0.22.10",
 		"lodash": "^4.17.21",
-		"ws": "^7.4.6"
+		"utf-8-validate": "^6.0.5",
+		"ws": "^8.18.0"
 	},
 	"devDependencies": {
 		"@companion-module/tools": "^1.5.0"

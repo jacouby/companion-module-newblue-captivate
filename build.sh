@@ -1,6 +1,6 @@
 #!/bin/bash
 
-nvm use 18
+~/.nvm/nvm.sh use 18
 yarn package
 
 # clear previous builds
