@@ -52,7 +52,7 @@ console.log(Jimp)
 
 const blankFull = new Jimp({ width: 72, height: 72, color: 0x00000000 })
 
-const CACHE_LIFETIME = 250
+const CACHE_LIFETIME = 250 // ms
 const USE_QWEBCHANNEL = true
 
 let debug = () => {}
@@ -109,6 +109,7 @@ class CaptivateInstance extends InstanceBase {
 		 * It also contains cached image data
 		 */
 		this.cache = new LocalCache()
+		this.cache.setCacheLifetime(CACHE_LIFETIME)
 
 		/** @type {Map<string, Promise>} debounce Captivate requests with promises */
 		this.promises = new Map()
@@ -143,6 +144,14 @@ class CaptivateInstance extends InstanceBase {
 		if (this.extraLogging) {
 			this.debug(...args)
 		}
+	}
+
+	startExtraLogging(delay = 250) {
+		this.debug('Starting extra logging for ' + delay + 'ms')
+		this.extraLogging = true
+		setTimeout(() => {
+			this.extraLogging = false
+		}, delay)
 	}
 
 	// Called when module gets deleted
@@ -411,6 +420,9 @@ class CaptivateInstance extends InstanceBase {
 		// re-poll the new data. To do that, we just need to empty the old data from the cache.
 		const feedbackDebounce = new Map()
 		this.sp._cmp_v1_handleFeedbackChangeEvent.connect(async (actorId, feedbackId, options, state) => {
+			// if (options.inputKey) {
+			// 	this.startExtraLogging(250)
+			// }
 			this.extraLog('Feedback change event received from Captivate:', { actorId, feedbackId, options, state })
 
 			const fullId = `${actorId}~${feedbackId}`
@@ -437,6 +449,7 @@ class CaptivateInstance extends InstanceBase {
 
 			// this tells Companion to poll this feedback again
 			// pragmatically, this will then lead to handleFeedbackRequest being called
+			// which will grab the real state from the cache or from Captivate
 			// this.debug('Scheduling feedback check for ' + fullId)
 			this.checkFeedbacks(fullId)
 
@@ -798,19 +811,11 @@ class CaptivateInstance extends InstanceBase {
 	 *
 	 * @param {string} fullId the actor id and feedback id will be connected by a '~'
 	 * @param {object} options The options as they are set in the feedback object
-	 * @returns {Promise<{[key: string]: string|number|boolean}>}
+	 * @returns {Promise<[{[key: string]: string|number|boolean}, boolean]>} the second value will be true if it was a fresh query
 	 * @throws {string}
 	 */
 	async getFeedbackState(fullId, options) {
 		return this.cache.getPromisedFromFullId(fullId, options, async () => {
-			// feedbackId is the full feedback id with actor and everything
-			if (fullId.match(/playout.feedback.native.layerPreview/)) {
-				this.extraLogging = true
-				setTimeout(() => {
-					this.extraLogging = false
-				}, 1000)
-			}
-
 			const state = await this._queryFeedbackState(fullId, options)
 
 			this.extraLog('Companion requested a feedback not in the cache:', {
@@ -848,13 +853,19 @@ class CaptivateInstance extends InstanceBase {
 	 * @returns
 	 */
 	async handleFeedbackRequest(event) {
-		// DO NOT DEBUG HERE... THERE ARE TOO MANY CALLS EVERY SECOND... USE IF STATEMENTS!!
-		// debug('~~~~~~~~~~ Feedback Callback ~~~~~~~~~~~~')
-		// debug(event)
-		// debug('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
+		// DO NOT JUST DEBUG HERE... THERE ARE TOO MANY CALLS EVERY SECOND... USE IF STATEMENTS!!
+		this.extraLog('~~~~~~~~~~ Feedback Callback ~~~~~~~~~~~~')
+		this.extraLog(event)
+		this.extraLog('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
 
 		// the feedbackId will be the full actor/feedback id (actorId~feedbackId)
-		let state = await this.getFeedbackState(event.feedbackId, event.options)
+		let [state, from_cache] = await this.getFeedbackState(event.feedbackId, event.options)
+		this.extraLog('Returning feedback state:', {
+			feedbackId: event.feedbackId,
+			options: event.options,
+			state,
+			from_cache,
+		})
 		return event.type == 'boolean' ? !!state?.value : state
 	}
 
