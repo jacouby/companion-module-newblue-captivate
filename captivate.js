@@ -1,8 +1,9 @@
+/* eslint-disable no-unused-vars */
 /**
  * @module  companion-module-newblue-captivate
  * @author  NewBlue https://www.newbluefx.com
  * @details Connects Companion to Captivate (Titler Live)
- * @version 3.0
+ * @version 1.x
  * @license MIT
  */
 
@@ -21,12 +22,9 @@
  *
  * @import {CompanionActionDefinition, CompanionFeedbackDefinition, CompanionFeedbackInfo} from '@companion-module/base'
  *
- * typedef {import('@companion-module/base').CompanionActionDefinition} CompanionActionDefinition
- * typedef {import('@companion-module/base').CompanionFeedbackDefinition} CompanionFeedbackDefinition
- * typedef {import('@companion-module/base').CompanionFeedbackInfo} CompanionFeedbackInfo
- * typedef {import('@companion-module/base').CompanionFeedbackInfo} CompanionFeedbackInfo
- * typedef {import('@companion-module/base').CompanionFeedbackInfo} CompanionFeedbackInfo
- * typedef {import('@companion-module/base').CompanionFeedbackInfo} CompanionFeedbackInfo
+ * @typedef {import('@companion-module/base').CompanionActionDefinition} CompanionActionDefinition
+ * @typedef {import('@companion-module/base').CompanionFeedbackDefinition} CompanionFeedbackDefinition
+ * @typedef {import('@companion-module/base').CompanionFeedbackInfo} CompanionFeedbackInfo
  *
  */
 
@@ -130,11 +128,11 @@ class CaptivateInstance extends InstanceBase {
 		this.on_air_status = []
 		this.debug = debug = (...args) =>
 			args.forEach((s) =>
-				this.log('debug', 'CAPTIVATE:\n' + typeof s == 'string' ? s : JSON.stringify(s, undefined, 2))
+				this.log('debug', 'CAPTIVATE:\n' + typeof s == 'string' ? s : JSON.stringify(s, undefined, 2)),
 			)
 		this.error = error = (...args) =>
 			args.forEach((s) =>
-				this.log('error', 'CAPTIVATE:\n' + typeof s == 'string' ? s : JSON.stringify(s, undefined, 2))
+				this.log('error', 'CAPTIVATE:\n' + typeof s == 'string' ? s : JSON.stringify(s, undefined, 2)),
 			)
 
 		this.configUpdated(config)
@@ -398,21 +396,22 @@ class CaptivateInstance extends InstanceBase {
 			}
 		})
 
-		// used to debounce this event
-		let registry_change_debounce = 0
-
-		// this event is triggered when something changes the internal automation registry in Captivate
+		// This event is triggered when something changes the internal automation registry in Captivate
+		// However, the Captivate database might get updated multiple times by multiple different calls
+		// so we only want to request new data after the Captivate database has settled down.
+		// To do that, we debounce this function for 1000ms.
 		this.sp._cmp_v1_handleActorRegistryChangeEvent.connect((elementId) => {
-			// elementId will be one of the following: 'actions', 'presets', 'feedbacks'
-			// this method runs the first one and then ignores all subsequent calls for 1000ms
-			if (registry_change_debounce) return
+			this.debug(`****Captivate Automation Registry updated`, elementId)
+			this.scheduleFunction('registry_refresh', () => this.refreshIntegrations(), 1000)
+			// // elementId will be one of the following: 'actions', 'presets', 'feedbacks'
+			// // this method runs the first one and then ignores all subsequent calls for 1000ms
+			// if (registry_change_debounce) return
 
-			console.log(`****Registry updated`, elementId)
-			this.checkForDefinitionUpdates() // will also call refreshIntegrations if needed
-			// this.refreshIntegrations() //
-			registry_change_debounce = setTimeout(() => {
-				registry_change_debounce = 0
-			}, 1000)
+			// this.checkForDefinitionUpdates() // will also call refreshIntegrations if needed
+			// // this.refreshIntegrations() //
+			// registry_change_debounce = setTimeout(() => {
+			// 	registry_change_debounce = 0
+			// }, 1000)
 		})
 
 		// This signal is triggered when something triggers a feedback event in Captivate
@@ -423,6 +422,9 @@ class CaptivateInstance extends InstanceBase {
 			// if (options.inputKey) {
 			// 	this.startExtraLogging(250)
 			// }
+			if (feedbackId.match(/csv\.feedback\.native/) || feedbackId.match(/weathercast/)) {
+				this.startExtraLogging(250)
+			}
 			this.extraLog('Feedback change event received from Captivate:', { actorId, feedbackId, options, state })
 
 			const fullId = `${actorId}~${feedbackId}`
@@ -465,6 +467,14 @@ class CaptivateInstance extends InstanceBase {
 		this.sp.scheduleCommand('subscribe', { events: 'play,data' }, {})
 	}
 
+	/**
+	 * Schedule a function for future execution. If the function is already scheduled,
+	 * the previous schedule will be cleared and replaced with the new one.
+	 *
+	 * @param {string} key
+	 * @param {Function} fn
+	 * @param {number} delay milliseconds to wait before running the function
+	 */
 	scheduleFunction(key, fn, delay = 1000) {
 		this.scheduleRunner ??= new Map()
 		if (this.scheduleRunner.has(key)) {
@@ -576,22 +586,22 @@ class CaptivateInstance extends InstanceBase {
 		const playStates = await this.sp.getValueForKey('newblue.automation.layerstate')
 
 		// did the feedback data include a dynamic image?
-		if (state.hasOwnProperty('overlayQueryKey')) {
+		if (hasProperty(state, 'overlayQueryKey')) {
 			let s = playStates[state.overlayQueryKey]
-			if (s == undefined || !s.hasOwnProperty('playState')) {
+			if (s == undefined || !hasProperty(s, 'playState')) {
 				// we have a property
 				s = {}
 				s.playState = 'unknown'
 			}
 
-			if (state.hasOwnProperty('overlayImageName_running')) {
+			if (hasProperty(state, 'overlayImageName_running')) {
 				if (s.playState === 'running') {
 					state.overlayImageName = state.overlayImageName_running
 				}
 				delete state.overlayImageName_running
 			}
 
-			if (state.hasOwnProperty('overlayImageName_paused')) {
+			if (hasProperty(state, 'overlayImageName_paused')) {
 				if (s.playState === 'paused') {
 					state.overlayImageName = state.overlayImageName_paused
 				}
@@ -602,22 +612,22 @@ class CaptivateInstance extends InstanceBase {
 			delete state.overlayQueryKey
 		}
 
-		if (state.hasOwnProperty('pngQueryKey')) {
+		if (hasProperty(state, 'pngQueryKey')) {
 			let s = playStates[state.pngQueryKey]
-			if (s == undefined || !s.hasOwnProperty('playState')) {
+			if (s == undefined || !hasProperty(s, 'playState')) {
 				s = {}
 				s.playState = 'unknown'
 			}
 
 			// we have a property
-			if (state.hasOwnProperty('png_running')) {
+			if (hasProperty(state, 'png_running')) {
 				if (s.playState === 'running') {
-					state.png_running = state.png_running
+					state.png = state.png_running
 				}
 				delete state.png_running
 			}
 
-			if (state.hasOwnProperty('png_paused')) {
+			if (hasProperty(state, 'png_paused')) {
 				if (s.playState === 'paused') {
 					state.png = state.png_paused
 				}
@@ -632,57 +642,54 @@ class CaptivateInstance extends InstanceBase {
 
 	async _handleFeedbackOverlayImage(state) {
 		// If the feedback specified an image name, attempt to load it from our local image cache.
-		if (state.hasOwnProperty('overlayImageName')) {
+		if (hasProperty(state, 'overlayImageName')) {
 			let layerImageData = await this.cache.getImageData(`${state.overlayImageName}`)
 			state.__old__overlayImageName = state.overlayImageName
 			delete state.overlayImageName
 
 			if (!layerImageData) {
 				debug('bad layer data')
-			} else if (state.hasOwnProperty('png64')) {
+			} else if (hasProperty(state, 'png64')) {
 				const baseImage = Buffer.from(state.png64, 'base64')
 				const overlayImage = Buffer.from(layerImageData, 'base64')
 
-				await new Promise(async (resolve, _) => {
-					// Load the base image
-					let base, overlay
+				// Load the base image
+				let base, overlay
 
-					try {
-						base = await Jimp.read(baseImage)
-					} catch (e) {
-						this.error('Error loading base image from state.png64:', { error: e, state })
-						base = blankFull
-					}
+				try {
+					base = await Jimp.read(baseImage)
+				} catch (e) {
+					this.error('Error loading base image from state.png64:', { error: e, state })
+					base = blankFull
+				}
 
-					try {
-						overlay = await Jimp.read(overlayImage)
-					} catch (e) {
-						this.error('Error loading base image from state.layerImageData:', { error: e, state })
-						overlay = blankFull
-					}
+				try {
+					overlay = await Jimp.read(overlayImage)
+				} catch (e) {
+					this.error('Error loading base image from state.layerImageData:', { error: e, state })
+					overlay = blankFull
+				}
 
-					// Resize overlay to match base image, if necessary
-					overlay.resize({ w: base.bitmap.width })
+				// Resize overlay to match base image, if necessary
+				overlay.resize({ w: base.bitmap.width })
 
-					// Composite the overlay onto the base image
-					base.composite(overlay, 0, 0, {
-						mode: Jimp.BLEND_SOURCE_OVER,
-						opacitySource: 1.0,
-						opacityDest: 1.0,
-					})
-
-					// Convert to buffer
-					const result = await base.getBase64('image/png')
-					if (result) {
-						state.png64 = result
-					}
-					resolve(state)
+				// Composite the overlay onto the base image
+				base.composite(overlay, 0, 0, {
+					mode: Jimp.BLEND_SOURCE_OVER,
+					opacitySource: 1.0,
+					opacityDest: 1.0,
 				})
+
+				// Convert to buffer
+				const result = await base.getBase64('image/png')
+				if (result) {
+					state.png64 = result
+				}
 			} else {
 				// fall back
 				state.png64 = this.layerImageData
 			}
-		} else if (state.hasOwnProperty('imageName') && state.imageName) {
+		} else if (hasProperty(state, 'imageName') && state.imageName) {
 			state.png64 = await this.cache.getImageData(`${state.imageName}`)
 			delete state.imageName
 		}
@@ -744,7 +751,7 @@ class CaptivateInstance extends InstanceBase {
 			/* boolean feedbacks only use `value` */
 			'value',
 		]) {
-			if (state.hasOwnProperty(property)) {
+			if (hasProperty(state, property)) {
 				result[property] = state[property]
 			}
 		}
@@ -788,12 +795,19 @@ class CaptivateInstance extends InstanceBase {
 		let reply
 		let state
 		try {
+			// fix feedback options for the 'input-routed.activesheet' feedback
+			// not needed for builds of captivate after 2025-01-17
+			if (feedbackId.match(/input-routed\.activesheet/) && !options.inputName) {
+				options = { ...options, inputName: 'Spreadsheet: _active_' }
+			}
+
 			reply = await this.sp._cmp_v1_queryFeedbackState(actorId, feedbackId, options)
 			this.extraLog('_cmp_v1_queryFeedbackState response', { actorId, feedbackId, options, reply })
 			if (!reply) {
 				return {}
 			}
 			state = JSON.parse(reply)
+
 			// this.debug('_cmp_v1_queryFeedbackState response', { actorId, feedbackId, options, state })
 			state = await this._handleFeedbackState(state) // will convert image names to images
 			// this.debug('state after handling for Companion', { state })
@@ -801,7 +815,7 @@ class CaptivateInstance extends InstanceBase {
 			return state
 		} catch (e) {
 			this.error(`Error parsing response for ${feedbackId}`)
-			this.error({ reply })
+			this.error({ error: e, reply })
 			return {}
 		}
 	}
@@ -958,6 +972,20 @@ class CompanionFeedback {
 			callback: state.callback,
 		})
 	}
+}
+
+/**
+ * Because of the security issues related to object.hasOwnProperty, we use this
+ * to wrap it in the better alternative.
+ *
+ * see https://eslint.org/docs/latest/rules/no-prototype-builtins
+ *
+ * @param {any} s
+ * @param {string} prop
+ * @returns {boolean}
+ */
+function hasProperty(s, prop) {
+	return Object.prototype.hasOwnProperty.call(s, prop)
 }
 
 runEntrypoint(CaptivateInstance, UpgradeScripts)
