@@ -12,10 +12,13 @@
 	"dependencies": {
 		"@companion-module/base": "~1.11",
 		"bufferutil": "^4.0.8",
-		"jimp": "^1.6.0",
+		"jimp": "1.6.0",
 		"lodash": "^4.17.21",
 		"utf-8-validate": "^6.0.5",
 		"ws": "^8.18.0"
+	},
+	"resolutions": {
+		"simple-xml-to-json": "1.2.2"
 	},
 	"devDependencies": {
 		"@companion-module/tools": "^2.1.1",
