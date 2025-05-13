@@ -20,3 +20,4 @@ mv pkg companion-module-newblue-captivate
 
 # zip the build
 zip -r companion-module-newblue-captivate--$date--$version.zip companion-module-newblue-captivate/*
+echo "Build completed: companion-module-newblue-captivate--$date--$version.zip"

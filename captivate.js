@@ -79,6 +79,8 @@ class CaptivateInstance extends InstanceBase {
 
 	extraLogging = false
 
+	unsubscribers = []
+
 	get instanceName() {
 		return this.label
 	}
@@ -280,6 +282,13 @@ class CaptivateInstance extends InstanceBase {
 		for (let [k, v] of Object.entries(this.scheduler)) {
 			if (typeof v == 'function') {
 				this.scheduler.promised[k] = promiseify(v)
+			} else if (typeof v == 'object' && v.connect) {
+				v._connect = v.connect
+				v.connect = (fn) => {
+					v._connect(fn)
+					return () => v.disconnect(fn)
+				}
+				this.scheduler.promised[k] = v
 			} else {
 				this.scheduler.promised[k] = v
 			}
@@ -380,12 +389,19 @@ class CaptivateInstance extends InstanceBase {
 		}
 	}
 
+	disconnectCallbacks() {
+		for (const unsub of this.unsubscribers) {
+			unsub?.()
+		}
+	}
+
 	/**
 	 * Some Captivate events get pushed to us through _cmp_v1 signals.
 	 */
 	connectCallbacks() {
 		// used to force a reload of this controller
-		this.sp.messageIn.connect((from, to, data) => {
+		this.disconnectCallbacks()
+		let unsub = this.sp.messageIn.connect((from, to, data) => {
 			if (from != this.selfId && to == 'companion-module') {
 				data = JSON.parse(data)
 				this.debug('Message from', from, 'to', to, 'data', data)
@@ -395,12 +411,13 @@ class CaptivateInstance extends InstanceBase {
 				}
 			}
 		})
+		this.unsubscribers.push(unsub)
 
 		// This event is triggered when something changes the internal automation registry in Captivate
 		// However, the Captivate database might get updated multiple times by multiple different calls
 		// so we only want to request new data after the Captivate database has settled down.
 		// To do that, we debounce this function for 1000ms.
-		this.sp._cmp_v1_handleActorRegistryChangeEvent.connect((elementId) => {
+		unsub = this.sp._cmp_v1_handleActorRegistryChangeEvent.connect((elementId) => {
 			this.debug(`****Captivate Automation Registry updated`, elementId)
 			this.scheduleFunction('registry_refresh', () => this.refreshIntegrations(), 1000)
 			// // elementId will be one of the following: 'actions', 'presets', 'feedbacks'
@@ -413,12 +430,13 @@ class CaptivateInstance extends InstanceBase {
 			// 	registry_change_debounce = 0
 			// }, 1000)
 		})
+		this.unsubscribers.push(unsub)
 
 		// This signal is triggered when something triggers a feedback event in Captivate
 		// If the triggering event sends an empty state object, treat it as a signal to
 		// re-poll the new data. To do that, we just need to empty the old data from the cache.
 		const feedbackDebounce = new Map()
-		this.sp._cmp_v1_handleFeedbackChangeEvent.connect(async (actorId, feedbackId, options, state) => {
+		unsub = this.sp._cmp_v1_handleFeedbackChangeEvent.connect(async (actorId, feedbackId, options, state) => {
 			// if (options.inputKey) {
 			// 	this.startExtraLogging(250)
 			// }
@@ -461,9 +479,10 @@ class CaptivateInstance extends InstanceBase {
 			// this.scheduleFunction(fullId, () => this.checkFeedbacks(fullId), 100);
 			this.scheduleFunction('all-feedbacks', () => this.checkFeedbacks(), 500)
 		})
+		this.unsubscribers.push(unsub)
 
 		// When Captivate issues a data event
-		this.sp.onNotify.connect(this.handleNotification.bind(this))
+		this.unsubscribers.push(this.sp.onNotify.connect(this.handleNotification.bind(this)))
 		this.sp.scheduleCommand('subscribe', { events: 'play,data' }, {})
 	}
 
@@ -543,16 +562,14 @@ class CaptivateInstance extends InstanceBase {
 	 */
 	async requestCompanionDefinition(kind) {
 		// kind = 'actions' | 'presets' | 'feedbacks'
-		let reply = await this.sp._cmp_v1_query(kind)
+		const reply = await this.sp._cmp_v1_query(kind)
 		this.log(reply)
 		try {
-			if (kind == 'actions') return reply.companion_actions
-			else if (kind == 'presets') return reply.companion_presets
-			else if (kind == 'feedbacks') return reply.companion_feedbacks
-			else if (kind == 'lastUpdateTime') return reply.companion_lastUpdateTime
-			else {
-				throw 'Type not supported'
-			}
+			if (kind === 'actions') return reply.companion_actions
+			if (kind === 'presets') return reply.companion_presets
+			if (kind === 'feedbacks') return reply.companion_feedbacks
+			if (kind === 'lastUpdateTime') return reply.companion_lastUpdateTime
+			throw 'Type not supported'
 		} catch (e) {
 			this.error(e)
 			throw e
