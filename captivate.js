@@ -39,7 +39,7 @@ const Presets = require('./lib/presets')
 const UpgradeScripts = require('./lib/upgrades')
 
 // other library imports
-const LocalCache = require('./lib/cache')
+const { LocalCache } = require('./lib/cache')
 
 // We need to use a specific version (5.9) of QWebChannel because 5.15 which ships with CP 2.2.1
 // breaks compatibility with Captivate
@@ -417,18 +417,12 @@ class CaptivateInstance extends InstanceBase {
 		// However, the Captivate database might get updated multiple times by multiple different calls
 		// so we only want to request new data after the Captivate database has settled down.
 		// To do that, we debounce this function for 1000ms.
-		unsub = this.sp._cmp_v1_handleActorRegistryChangeEvent.connect((elementId) => {
-			this.debug(`****Captivate Automation Registry updated`, elementId)
-			this.scheduleFunction('registry_refresh', () => this.refreshIntegrations(), 1000)
-			// // elementId will be one of the following: 'actions', 'presets', 'feedbacks'
-			// // this method runs the first one and then ignores all subsequent calls for 1000ms
-			// if (registry_change_debounce) return
+		unsub = this.sp._cmp_v1_handleActorRegistryChangeEvent.connect((category, actorId) => {
+			// category will be one of the following: 'actorDelete', 'resetRegistry', 'actions', 'presets', 'feedbacks'
+			this.debug(`****Captivate Automation Registry updated`, category, actorId)
 
-			// this.checkForDefinitionUpdates() // will also call refreshIntegrations if needed
-			// // this.refreshIntegrations() //
-			// registry_change_debounce = setTimeout(() => {
-			// 	registry_change_debounce = 0
-			// }, 1000)
+			// this method runs the first one and then ignores all subsequent calls for 1000ms
+			this.scheduleFunction('registry_refresh', () => this.refreshIntegrations(), 1000)
 		})
 		this.unsubscribers.push(unsub)
 
@@ -738,7 +732,7 @@ class CaptivateInstance extends InstanceBase {
 			// debug('state with overlay information', state)
 		}
 
-		state = await this._adaptToCompanionFeedback(state)
+		state = await this._adaptToCompanionStyle(state)
 
 		this.extraLog('Feedback state after preparing for Companion:', { original, converted: state })
 
@@ -751,7 +745,7 @@ class CaptivateInstance extends InstanceBase {
 	 * @param {*} state The state that comes from Captivate. It could have any number of fields, but we only care about the ones that are relevant to Companion.
 	 * @returns {Promise<import('@companion-module/base').CompanionFeedbackButtonStyleResult|import('@companion-module/base').CompanionAdvancedFeedbackResult>}
 	 */
-	async _adaptToCompanionFeedback(state) {
+	async _adaptToCompanionStyle(state) {
 		let result = {}
 		for (let property of [
 			'text',
@@ -764,6 +758,7 @@ class CaptivateInstance extends InstanceBase {
 			'show_topbar',
 			/* advanced only */
 			'imageBuffer',
+			'imageBufferEncoding',
 			'imagePosition',
 			/* boolean feedbacks only use `value` */
 			'value',
@@ -772,6 +767,14 @@ class CaptivateInstance extends InstanceBase {
 				result[property] = state[property]
 			}
 		}
+
+		// our Automation Library uses different field names for some properties
+		if (state.textColor) result.color = state.textColor
+		if (state.backgroundColor) result.bgcolor = state.backgroundColor
+		if (state.textSize) result.size = state.textSize
+		if (state.textAlign) result.alignment = state.textAlign
+		if (state.showTopBar) result.show_topbar = state.showTopBar
+		if (state.imageAlign) result.pngalignment = state.imageAlign
 
 		// we can pass raw base 64 image data to Companion using the image64 property (png64 will take precedence)
 		if (!result.png64 && state.image64) {
@@ -806,7 +809,14 @@ class CaptivateInstance extends InstanceBase {
 	 * @returns {Promise<{[key: string]: string|number|boolean}>}
 	 */
 	async _queryFeedbackState(fullId, options) {
-		const [actorId, feedbackId] = fullId.split('~', 2)
+		const [actorId, scope, fbkid] = fullId.split('~', 3)
+
+		// older versions of this module didn't understand scopes for feedbacks
+		// so older versions of Captivate didn't send the scope.
+		// Once everyone is on this version of the companion module, the Captivate
+		// backend can be updated to send scopes with feedbacks.
+		// for now, if the fbkid is empty, we will use the scope as the feedback id
+		const feedbackId = fbkid || scope
 
 		// console.log('Asking Captivate for feedback state:', actorId, feedbackId, options)
 		let reply
