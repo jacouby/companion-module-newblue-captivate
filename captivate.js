@@ -49,9 +49,11 @@ const { Jimp } = require('jimp')
 console.log(Jimp)
 
 const blankFull = new Jimp({ width: 72, height: 72, color: 0x00000000 })
+const blankFullBuffer = blankFull.getBuffer('image/png')
 
 const CACHE_LIFETIME = 250 // ms
 const USE_QWEBCHANNEL = true
+const DEFAULT_BORDER_WIDTH = 2
 
 let debug = () => {}
 let error = () => {}
@@ -651,8 +653,64 @@ class CaptivateInstance extends InstanceBase {
 		return state
 	}
 
+	/**
+	 *
+	 * @param {*} image
+	 * @param {*} borderColor
+	 * @param {string|number} borderWidth if string, left, top, right, bottom delimited by spaces
+	 */
+	async _drawBorder(image, borderColor, borderWidth) {
+		// incoming borderColor can be a string (hex) or a number (integer)
+		// if it's a string, we assume it's a hex color code (e.g. '#ff0000' or '#ff0000ff')
+		// if it's a number, we assume it's an integer color value (e.g. 0xff0000ff)
+		// if it's a hex color code, we convert it to an integer with alpha channel (alpha is the lowest byte)
+		// if it's an integer, we assume it's already in the correct format
+		if (typeof borderColor == 'string' && borderColor.startsWith('#')) {
+			const noLeadingHash = borderColor.slice(1) // remove the leading #
+			borderColor = parseInt(noLeadingHash, 16) // convert hex to integer
+			if (noLeadingHash.length <= 6) {
+				borderColor = (BigInt(borderColor) << 8n) | 0xffn // add alpha channel (fully opaque)
+				borderColor = Number(borderColor) // convert back to number
+			}
+		}
+
+		const { width, height } = image.bitmap
+
+		let left, top, right, bottom
+		if (typeof borderWidth == 'string') {
+			// if it's a string, split it by spaces and parse the values
+			;[left, top, right, bottom] = borderWidth.split(' ').map((w) => parseInt(w, 10))
+
+			if (left == undefined) left = DEFAULT_BORDER_WIDTH
+			if (right == undefined) right = left
+			if (top == undefined) top = left
+			if (bottom == undefined) bottom = top
+		} else {
+			;[left, top, right, bottom] = [borderWidth, borderWidth, borderWidth, borderWidth]
+		}
+
+		// Top border
+		image.scan(0, 0, width, top, (x, y, idx) => {
+			image.bitmap.data.writeUInt32BE(borderColor, idx)
+		})
+
+		// Bottom border
+		image.scan(0, height - bottom, width, bottom, (x, y, idx) => {
+			image.bitmap.data.writeUInt32BE(borderColor, idx)
+		})
+
+		// Left border
+		image.scan(0, 0, left, height, (x, y, idx) => {
+			image.bitmap.data.writeUInt32BE(borderColor, idx)
+		})
+
+		// Right border
+		image.scan(width - right, 0, right, height, (x, y, idx) => {
+			image.bitmap.data.writeUInt32BE(borderColor, idx)
+		})
+	}
+
 	async _handleFeedbackOverlayImage(state) {
-		// If the feedback specified an image name, attempt to load it from our local image cache.
 		if (hasProperty(state, 'overlayImageName')) {
 			let layerImageData = await this.cache.getImageData(`${state.overlayImageName}`)
 			state.__old__overlayImageName = state.overlayImageName
@@ -691,6 +749,12 @@ class CaptivateInstance extends InstanceBase {
 					opacityDest: 1.0,
 				})
 
+				if (hasProperty(state, 'borderColor') || hasProperty(state, 'borderWidth')) {
+					await this._drawBorder(base, state.borderColor, state.borderWidth ?? DEFAULT_BORDER_WIDTH)
+					delete state.borderColor
+					delete state.borderWidth
+				}
+
 				// Convert to buffer
 				const result = await base.getBase64('image/png')
 				if (result) {
@@ -708,6 +772,34 @@ class CaptivateInstance extends InstanceBase {
 	}
 
 	/**
+	 * This function should be called after all the other image functions because it assumes
+	 * that stat.png64 is set to the image data.
+	 *
+	 * @param {*} state
+	 * @returns {Promise<*>}
+	 */
+	async _handleFeedbackBorderColor(state) {
+		const baseImage = state.png64 ? Buffer.from(state.png64, 'base64') : blankFullBuffer
+		let image
+		try {
+			image = await Jimp.read(baseImage)
+		} catch (e) {
+			this.error('Error loading base image from state.png64:', { error: e, state })
+			image = await Jimp.read(blankFullBuffer)
+		}
+
+		await this._drawBorder(image, state.borderColor, state.borderWidth ?? DEFAULT_BORDER_WIDTH)
+		delete state.borderColor
+		delete state.borderWidth
+
+		// Convert to buffer
+		const result = await image.getBase64('image/png')
+		if (result) {
+			state.png64 = result
+		}
+		return state
+	}
+	/**
 	 * This function takes the feedback state that comes from Captivate, and does the following:
 	 * 1. convert the Captivate feedback data into a format that Companion can use
 	 * 2. if the feedback data includes an image, handle it.
@@ -722,14 +814,20 @@ class CaptivateInstance extends InstanceBase {
 		if (state.overlayQueryKey || state.pngQueryKey) {
 			// debug('state with overlay query keys', state)
 			state = await this._handleFeedbackOverlayPlayStates(state)
-			// debug('state with overlay information', state)
+			debug('state with overlay information', state)
 		}
 
 		// now, handle the specified overlay image if there is one
 		if (state.overlayImageName || state.imageName) {
 			// debug('state with overlay image name keys', state)
 			state = await this._handleFeedbackOverlayImage(state)
-			// debug('state with overlay information', state)
+			debug('state with overlay information', state)
+		}
+
+		if (state.borderColor || state.borderWidth) {
+			// debug('state with border color', state)
+			state = await this._handleFeedbackBorderColor(state)
+			debug('state with border color applied', state)
 		}
 
 		state = await this._adaptToCompanionStyle(state)
