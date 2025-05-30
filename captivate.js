@@ -29,7 +29,7 @@
  */
 
 /** Imports */
-const { InstanceBase, runEntrypoint, InstanceStatus } = require('@companion-module/base')
+const { InstanceBase, runEntrypoint, InstanceStatus, splitRgb } = require('@companion-module/base')
 
 // Companion Elements
 const Configuration = require('./lib/config')
@@ -656,23 +656,35 @@ class CaptivateInstance extends InstanceBase {
 	/**
 	 *
 	 * @param {*} image
-	 * @param {*} borderColor
+	 * @param {string|number} borderColor
 	 * @param {string|number} borderWidth if string, left, top, right, bottom delimited by spaces
 	 */
 	async _drawBorder(image, borderColor, borderWidth) {
+		// jimp colors are in the format 0xRRGGBBAA, where AA is the alpha channel
+		// companion uses the format 0xAARRGGBB, where AA is the alpha channel
+		//
 		// incoming borderColor can be a string (hex) or a number (integer)
-		// if it's a string, we assume it's a hex color code (e.g. '#ff0000' or '#ff0000ff')
-		// if it's a number, we assume it's an integer color value (e.g. 0xff0000ff)
+		// if it's a string, we assume it's a hex color code (e.g. '#ff0000' or '#ff0000ff', rrggbbaa)
 		// if it's a hex color code, we convert it to an integer with alpha channel (alpha is the lowest byte)
-		// if it's an integer, we assume it's already in the correct format
-		if (typeof borderColor == 'string' && borderColor.startsWith('#')) {
-			const noLeadingHash = borderColor.slice(1) // remove the leading #
-			borderColor = parseInt(noLeadingHash, 16) // convert hex to integer
-			if (noLeadingHash.length <= 6) {
-				borderColor = (BigInt(borderColor) << 8n) | 0xffn // add alpha channel (fully opaque)
-				borderColor = Number(borderColor) // convert back to number
-			}
-		}
+		// if it's a number, we assume it's an integer color value in companion format (e.g. 0xAARRGGBB)
+		// if it's a number, we will need to convert it to Jimp format (0xRRGGBBAA)
+		//
+		// Let Companion do the parsing for us (alpha will be a value between 0 and 1)
+		const { r, g, b, a } = splitRgb(borderColor)
+
+		// assemble to a Jimp-compatible color value
+		borderColor = (r << 16) | (g << 8) | b // convert to Jimp format (0xRRGGBB)
+		borderColor = (BigInt(borderColor) << 8n) | BigInt(a * 255) // add the alpha
+		borderColor = Number(borderColor) // convert back to number
+
+		// if (typeof borderColor == 'string' && borderColor.startsWith('#')) {
+		// 	const noLeadingHash = borderColor.slice(1) // remove the leading #
+		// 	borderColor = parseInt(noLeadingHash, 16) // convert hex to integer
+		// 	if (noLeadingHash.length <= 6) {
+		// 		borderColor = (BigInt(borderColor) << 8n) | 0xffn // add alpha channel (fully opaque)
+		// 		borderColor = Number(borderColor) // convert back to number
+		// 	}
+		// }
 
 		const { width, height } = image.bitmap
 
@@ -682,11 +694,12 @@ class CaptivateInstance extends InstanceBase {
 			;[left, top, right, bottom] = borderWidth.split(' ').map((w) => parseInt(w, 10))
 
 			if (left == undefined) left = DEFAULT_BORDER_WIDTH
-			if (right == undefined) right = left
 			if (top == undefined) top = left
+			if (right == undefined) right = left
 			if (bottom == undefined) bottom = top
 		} else {
-			;[left, top, right, bottom] = [borderWidth, borderWidth, borderWidth, borderWidth]
+			borderWidth = Math.max(borderWidth, 0) // disallow negative values
+			;[left, top, right, bottom] = [borderWidth, borderWidth, borderWidth, borderWidth] // companion's eslint uses this construct for destructuring
 		}
 
 		// Top border
