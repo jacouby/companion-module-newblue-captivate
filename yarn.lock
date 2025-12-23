@@ -495,27 +495,12 @@
   resolved "https://registry.npmjs.org/@types/estree/-/estree-1.0.6.tgz"
   integrity sha512-AYnb1nQyY49te+VRAVgmzfcgjYS91mY5P0TKUDCLEM+gNnA+3T6rWITXRLYCpahpqSQbN5cE+gHpnPyXjHWxcw==
 
-"@types/fs-extra@>=11":
-  version "11.0.4"
-  resolved "https://registry.npmjs.org/@types/fs-extra/-/fs-extra-11.0.4.tgz"
-  integrity sha512-yTbItCNreRooED33qjunPthRcSjERP1r4MqCZc7wv0u2sUkzTFp45tgUfS5+r7FrZPdmCCNflLhVSP/o+SemsQ==
-  dependencies:
-    "@types/jsonfile" "*"
-    "@types/node" "*"
-
 "@types/json-schema@*", "@types/json-schema@^7.0.15", "@types/json-schema@^7.0.8", "@types/json-schema@^7.0.9":
   version "7.0.15"
   resolved "https://registry.npmjs.org/@types/json-schema/-/json-schema-7.0.15.tgz"
   integrity sha512-5+fP8P8MFNC+AyZCDxrB2pkZFPGzqQWUzpSeuuVLvm8VMcorNYavBqoFcxK8bQz4Qsbn4oUEEem4wDLfcysGHA==
 
-"@types/jsonfile@*":
-  version "6.1.4"
-  resolved "https://registry.npmjs.org/@types/jsonfile/-/jsonfile-6.1.4.tgz"
-  integrity sha512-D5qGUYwjvnNNextdU59/+fI+spnwtTFmyQP0h+PfIOSkNfpU6AOICUOkm4i0OnSk+NyjdPJrxCDro0sJsWlRpQ==
-  dependencies:
-    "@types/node" "*"
-
-"@types/node@*", "@types/node@>=20":
+"@types/node@*":
   version "22.12.0"
   resolved "https://registry.npmjs.org/@types/node/-/node-22.12.0.tgz"
   integrity sha512-Fll2FZ1riMjNmlmJOdAyY5pUbkftXslB5DgEzlIuNaiWhXd00FhWxVC/r4yV/4wBb9JfImTu+jiSvXTkJ7F/gA==
@@ -1256,9 +1241,9 @@ glob-to-regexp@^0.4.1:
   integrity sha512-lkX1HJXwyMcprw/5YUZc2s7DrpAiHB21/V+E1rHUrVNokkvB6bqMzT0VfV6/86ZNabt1k14YOIaT7nDvOX3Iiw==
 
 glob@^10.3.7:
-  version "10.4.5"
-  resolved "https://registry.npmjs.org/glob/-/glob-10.4.5.tgz"
-  integrity sha512-7Bv8RF0k6xjo7d4A/PxYLbUCfb6c+Vpd2/mB2yRDlew7Jb5hEXiCD9ibfO7wpk8i4sevK6DFny9h7EYbM3/sHg==
+  version "10.5.0"
+  resolved "https://registry.yarnpkg.com/glob/-/glob-10.5.0.tgz#8ec0355919cd3338c28428a23d4f24ecc5fe738c"
+  integrity sha512-DfXN8DfhJ7NH3Oe7cFmu3NCu1wKbkReJ8TorzSAFbSKrlNaQSKfIzqYqVY8zlbs2NLBbWpRiU52GX2PbaBVNkg==
   dependencies:
     foreground-child "^3.1.0"
     jackspeak "^3.1.2"
@@ -1440,9 +1425,9 @@ jpeg-js@^0.4.4:
   integrity sha512-WZzeDOEtTOBK4Mdsar0IqEU5sMr3vSV2RqkAIzUEV2BHnUfKGyswWFPFwK5EeDo93K3FohSHbLAjj0s1Wzd+dg==
 
 js-yaml@^4.1.0:
-  version "4.1.0"
-  resolved "https://registry.npmjs.org/js-yaml/-/js-yaml-4.1.0.tgz"
-  integrity sha512-wpxZs9NoxZaJESJGIZTyDEaYpl0FKSA+FB9aJiyemKhMwkxQg63h4T1KJgUGHpTqPDNRcmmYLugrRjJlBtWvRA==
+  version "4.1.1"
+  resolved "https://registry.yarnpkg.com/js-yaml/-/js-yaml-4.1.1.tgz#854c292467705b699476e1a2decc0c8a3458806b"
+  integrity sha512-qQKT4zQxXl8lLwBtHMWwaTcGfFOZviOJet3Oy/xmGk2gZH677CJM9EvtfdSkgWcATZhj/55JZ0rmy3myCT5lsA==
   dependencies:
     argparse "^2.0.1"
 
@@ -2343,9 +2328,6 @@ zod@^3.23.8:
   integrity sha512-muH7gBL9sI1nciMZV67X5fTKKBLtwpZ5VBp1vsOQzj1MhrBZ4wlVCm3gedKZWLp0Oyel8sIGfeiz54Su+OVT+A==
 
 zx@^8.2.4:
-  version "8.3.2"
-  resolved "https://registry.yarnpkg.com/zx/-/zx-8.3.2.tgz#0526f890b14978bd7a3ef02d094c10e26697d7e7"
-  integrity sha512-qjTunv1NClO05jDaUjrNZfpqC9yvNCchge/bzOcQevsh1aM5qE3TG6MY24kuQKlOWx+7vNuhqO2wa9nQCIGvZA==
-  optionalDependencies:
-    "@types/fs-extra" ">=11"
-    "@types/node" ">=20"
+  version "8.8.5"
+  resolved "https://registry.yarnpkg.com/zx/-/zx-8.8.5.tgz#d092d8c0017aa7c5a276fda88ff19e4b1d91cc64"
+  integrity sha512-SNgDF5L0gfN7FwVOdEFguY3orU5AkfFZm9B5YSHog/UDHv+lvmd82ZAsOenOkQixigwH2+yyH198AwNdKhj+RA==
